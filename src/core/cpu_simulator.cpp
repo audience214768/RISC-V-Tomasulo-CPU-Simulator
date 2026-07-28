@@ -21,6 +21,7 @@ CPUSimulator::CPUSimulator() {
         if (line[0] == '@') {
             std::string str_addr = line.substr(1);
             address = std::stoul(str_addr, nullptr, 16);
+            //std::cerr << address << std::endl;
             offset = 0;
         } else {
             std::stringstream ss(line);
@@ -28,6 +29,7 @@ CPUSimulator::CPUSimulator() {
             while (ss >> str_byte) {
                 u8 data = static_cast<u8>(std::stoul(str_byte, nullptr, 16));
                 state.memory.code[address + offset] = data;
+                offset++;
             }
         }
     }
@@ -36,6 +38,12 @@ CPUSimulator::CPUSimulator() {
     state.rob.head = 0; state.rob.last = 0;
     state.rs.clear();
     state.rat.clear();
+    state.lsq.clear();
+    state.cdb.clear();
+    state.fetch.pc = 0;
+    state.fetch.halt = false;
+    state.fetch.instruction_pc = 0;
+    state.fetch.raw_instruction = 0;
     state.fetch.mispredict = false;
     state.fetch.correct_pc   = 0;
     state.fetch.pred_taken   = false;
@@ -51,6 +59,7 @@ void CPUSimulator::run() {
         }
         clock++;
         tick();
+        fprintf(stderr, "pc = %08x\n", state.fetch.pc);
     }
     fprintf(stdout, "%d\n", ret);
 }
@@ -58,10 +67,15 @@ void CPUSimulator::run() {
 void CPUSimulator::tick() {
     CPUState nxt = state;
     commit(state, nxt);
+    //fprintf(stderr, "check1\n");
     writeBack(state, nxt);
+    //fprintf(stderr, "check2\n");
     memory(state, nxt);
+    //fprintf(stderr, "check3\n");
     issue(state, nxt);
+    //fprintf(stderr, "check4\n");
     execute(state, nxt);
+    //fprintf(stderr, "check5\n");
     fetch(state, nxt);
     nxt.reg.reg[0] = 0;
     state = nxt;

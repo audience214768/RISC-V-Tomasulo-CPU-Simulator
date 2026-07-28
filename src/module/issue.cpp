@@ -49,6 +49,7 @@ auto decode(u32 raw) ->Instruction {
             break;
     }
     return Instruction {
+        .raw = raw,
         .opcode = opcode,
         .func3 = (raw >> 12) & 0x7,
         .func7 = (raw >> 25) & 0x7,
@@ -65,12 +66,24 @@ void issue(const CPUState &cur, CPUState &nxt) {
     if (cur.fetch.mispredict || nxt.fetch.mispredict) return;
     if (cur.fetch.pred_taken || nxt.fetch.pred_taken) return;
 
+    if (cur.fetch.raw_instruction == 0) return;
+
     auto ins = decode(cur.fetch.raw_instruction);
+
+    if (cur.fetch.raw_instruction == TERMINATE_INST) {
+        nxt.fetch.halt = true;
+        return;
+    }
+    // if (ins.rd == 10) {
+    //     fprintf(stderr, "issue to a0: pc=0x%x opcode=0x%x raw=0x%08x rob_tag=%zu\n",
+    //             cur.fetch.instruction_pc, ins.opcode, ins.raw, cur.rob.last);
+    // }
     if (nxt.rob.full()) {
         fprintf(stderr, "rob is full\n");
         exit(1);
     }
     size_t lsq_tag = 0;
+    //fprintf(stderr, "check\n");
     if (ins.opcode == 0x3 || ins.opcode == 0x23) {
         LSQEntry lsq = LSQEntry {
             .valid = true,
@@ -89,6 +102,7 @@ void issue(const CPUState &cur, CPUState &nxt) {
                 lsq.is_unsigned = false;
                 break;
             case 0x2: // lw / sw
+                //fprintf(stderr, "load: lw\n");
                 lsq.width = 4;
                 lsq.is_unsigned = false;
                 break;
@@ -109,7 +123,7 @@ void issue(const CPUState &cur, CPUState &nxt) {
         .ins = ins,
         .rob_tag = cur.rob.last,
         .lsq_tag = lsq_tag,
-        .pc = cur.fetch.pc,
+        .pc = cur.fetch.instruction_pc,
     };
     if (
         ins.opcode == 0x6F ||
@@ -117,10 +131,14 @@ void issue(const CPUState &cur, CPUState &nxt) {
         ins.opcode == 0x37 ||
         ins.opcode == 0x73
     ) {
-
+        rs_entry.ready1 = true;
+        rs_entry.value1 = 0;
     } else if (cur.rat.map[ins.rs1] == NONE_ROB_TAG) {
         rs_entry.ready1 = true;
         rs_entry.value1 = cur.reg.reg[ins.rs1];
+    } else if (cur.rob.buf[cur.rat.map[ins.rs1]].ready) {
+        rs_entry.ready1 = true;
+        rs_entry.value1 = cur.rob.buf[cur.rat.map[ins.rs1]].result;
     } else {
         rs_entry.ready1 = false;
         rs_entry.query1 = cur.rat.map[ins.rs1];
@@ -139,9 +157,30 @@ void issue(const CPUState &cur, CPUState &nxt) {
     } else if (cur.rat.map[ins.rs2] == NONE_ROB_TAG) {
         rs_entry.ready2 = true;
         rs_entry.value2 = cur.reg.reg[ins.rs2];
+    } else if (cur.rob.buf[cur.rat.map[ins.rs2]].ready) {
+        rs_entry.ready2 = true;
+        rs_entry.value2 = cur.rob.buf[cur.rat.map[ins.rs2]].result;
     } else {
         rs_entry.ready2 = false;
         rs_entry.query2 = cur.rat.map[ins.rs2];
+    }
+    if (!rs_entry.ready1) {
+        for (int j = 0; j < CDB_SIZE; j++) {
+            if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs_entry.query1) {
+                rs_entry.ready1 = true;
+                rs_entry.value1 = cur.cdb.buf[j].result;
+                break;
+            }
+        }
+    }
+    if (!rs_entry.ready2) {
+        for (int j = 0; j < CDB_SIZE; j++) {
+            if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs_entry.query2) {
+                rs_entry.ready2 = true;
+                rs_entry.value2 = cur.cdb.buf[j].result;
+                break;
+            }
+        }
     }
     nxt.rs.push(rs_entry);
 
@@ -168,18 +207,19 @@ void issue(const CPUState &cur, CPUState &nxt) {
 
     if (ins.opcode == 0x6F) {
         nxt.fetch.pred_taken  = true;
-        nxt.fetch.pred_target = cur.fetch.pc + ins.imm;
+        nxt.fetch.pred_target = cur.fetch.instruction_pc + ins.imm;
     }
 
     if (
         ins.opcode != 0x23 &&
         ins.opcode != 0x63 &&
-        ins.opcode != 0x73
+        ins.opcode != 0x73 &&
+        ins.rd != 0 //the x0 is always reset so can't be renamed!!!
     ) {
         nxt.rat.map[ins.rd] = cur.rob.last;
     }
 
-    nxt.rob.buf[(cur.rob.last + 1) % ROB_SIZE] = ROBEntry {
+    nxt.rob.buf[cur.rob.last] = ROBEntry {
         .ready = false,
         .ins = ins,
         .result = 0,

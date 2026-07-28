@@ -71,6 +71,7 @@ static auto branch_cond(u32 func3, u32 rs1, u32 rs2) -> bool {
 }
 
 static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
+    fprintf(stderr, "flush\n");
     size_t flush_start = (branch_rob_tag + 1) % ROB_SIZE;
     size_t flush_end   = nxt.rob.last;
 
@@ -107,6 +108,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
         const RSEntry &rs = cur.rs.buf[i];
         u32 rs1; u32 rs2; u32 imm = rs.ins.imm;
         if (!rs.valid) continue;
+        //fprintf(stderr, "rsstate raw = 0x%0x rs1 = %d rs2 = %d\n", rs.ins.raw, rs.value1, rs.value2);
         if (!rs.ready1) {
             bool find = false;
             for (int j = 0; j < CDB_SIZE; j++) {
@@ -140,7 +142,6 @@ void execute(const CPUState &cur, CPUState &nxt) {
         u32 result = 0;
         bool write_cdb = true;
         bool free_rs   = true;
-
         switch (rs.ins.opcode) {
             // ─── R-type ALU: OP (0x33) ───
             case 0x33:
@@ -149,6 +150,9 @@ void execute(const CPUState &cur, CPUState &nxt) {
             // ─── I-type ALU: OP_IMM (0x13) ───
             case 0x13:
                 result = ALU_I(rs.ins.func3, rs.ins.func7, rs1, imm);
+                // if (rs.ins.raw == TERMINATE_INST) {
+                //     fprintf(stderr, "TERMINATE exec: rs1=%d imm=%d result=%d\n", rs1, imm, result);
+                // }
                 break;
             // ─── LUI (0x37) ───
             case 0x37:
@@ -165,9 +169,9 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 write_cdb = false;
                 break;
-            // ─── STORE (0x23): 计算有效地址 ───
+            // ─── STORE (0x23) ───
             case 0x23:
-                result = rs2 + imm;
+                result = rs1 + imm;
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 nxt.lsq.buf[rs.lsq_tag].data_ready = true;
@@ -195,6 +199,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     nxt.fetch.correct_pc  = rs.pc + rs.ins.imm;
                     flush_pipeline(nxt, rs.rob_tag);
                 }
+                nxt.rob.buf[rs.rob_tag].ready = true;
                 write_cdb = false;
                 break;
             }
@@ -220,11 +225,13 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 write_cdb = false;
                 break;
             default:
-                fprintf(stderr, "unknown opcode in execute: 0x%x\n", rs.ins.opcode);
+                fprintf(stderr, "unknown opcode in execute: 0x%x, raw=0x%08x pc=0x%08x\n",
+                        rs.ins.opcode, rs.ins.raw, rs.pc);
                 exit(1);
         }
 
         if (write_cdb) {
+            //fprintf(stderr, "write cdb 0x%0x\n", rs.ins.raw);
             nxt.cdb.push(rs.rob_tag, result);
         }
 

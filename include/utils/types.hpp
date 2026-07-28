@@ -7,6 +7,7 @@
 #include "config.hpp"
 
 struct Instruction {
+    u32 raw;
     u32 opcode;
     u32 func3;
     u32 func7;
@@ -75,6 +76,7 @@ struct RegState {
 
 struct FetchState {
     u32 pc;
+    u32 instruction_pc;
     u32 raw_instruction;
     bool halt;
     bool mispredict;
@@ -103,6 +105,7 @@ struct RATState {
 struct RSState {
     RSEntry buf[RS_SIZE];
     void push(const RSEntry &rs) {
+        fprintf(stderr, "rs push\n");
         auto find = false;
         for (int i = 0; i < RS_SIZE; i++) {
             if (!buf[i].valid) {
@@ -132,11 +135,13 @@ struct CDBState {
         }
     }
     void push(size_t rob_tag, u32 result) {
+        fprintf(stderr, "cdb push\n");
         for (int j = 0; j < CDB_SIZE; j++) {
             if (!buf[j].valid) {
                 buf[j].valid = true;
                 buf[j].rob_tag = rob_tag;
                 buf[j].result = result;
+                break;
             }
         }
     }
@@ -148,8 +153,10 @@ struct LSQState {
     size_t last;
 
     auto push(const LSQEntry &lsq) -> size_t {
-        if ((head + 1) % LSQ_SIZE == last) {
+        fprintf(stderr, "lsq push\n");
+        if ((last + 1) % LSQ_SIZE == head) {
             fprintf(stderr, "LSQ full\n");
+            exit(1);
         }
         int ret = last;
         buf[last] = std::move(lsq);
