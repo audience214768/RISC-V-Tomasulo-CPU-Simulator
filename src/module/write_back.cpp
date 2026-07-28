@@ -1,0 +1,13 @@
+#include "module/write_back.hpp"
+#include "utils/config.hpp"
+#include "utils/types.hpp"
+
+void writeBack(const CPUState &cur, CPUState &nxt) {
+    for (int i = 0; i < CDB_SIZE; i++) {
+        if (cur.cdb.buf[i].valid) {
+            nxt.rob.buf[cur.cdb.buf[i].rob_tag].ready = true;
+            nxt.rob.buf[cur.cdb.buf[i].rob_tag].result = cur.cdb.buf[i].result;
+            nxt.cdb.buf[i].valid = false;
+        }
+    }
+}

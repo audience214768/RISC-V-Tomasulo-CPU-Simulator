@@ -8,3 +8,7 @@
 
 # JetBrains IDE (CLion / IDEA) 缓存
 .idea/
+
+build/
+.cache/
+plan.md
