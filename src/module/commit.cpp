@@ -32,8 +32,8 @@ void commit(const CPUState &cur, CPUState &nxt) {
         }
         if (rob.ins.opcode == 0x23) {
             // if (rob.address == 0x106c) {
-            //     fprintf(stderr, "STORE to 0x106c: commit_tag=%zu data=%d (0x%x)\n",
-            //             commit_tag, rob.result, rob.result);
+            //     fprintf(stderr, "STORE to 0x106c: commit_tag=%zu data=%d\n",
+            //             commit_tag, rob.result);
             // }
             nxt.memory.data[rob.address] = rob.result & 0xFF;
             nxt.memory.data[rob.address + 1] = (rob.result >> 8) & 0xFF;

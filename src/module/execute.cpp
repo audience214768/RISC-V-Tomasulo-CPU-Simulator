@@ -71,7 +71,7 @@ static auto branch_cond(u32 func3, u32 rs1, u32 rs2) -> bool {
 }
 
 static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
-    fprintf(stderr, "flush\n");
+    //fprintf(stderr, "flush\n");
     size_t flush_start = (branch_rob_tag + 1) % ROB_SIZE;
     size_t flush_end   = nxt.rob.last;
 
@@ -150,9 +150,6 @@ void execute(const CPUState &cur, CPUState &nxt) {
             // ─── I-type ALU: OP_IMM (0x13) ───
             case 0x13:
                 result = ALU_I(rs.ins.func3, rs.ins.func7, rs1, imm);
-                // if (rs.ins.raw == TERMINATE_INST) {
-                //     fprintf(stderr, "TERMINATE exec: rs1=%d imm=%d result=%d\n", rs1, imm, result);
-                // }
                 break;
             // ─── LUI (0x37) ───
             case 0x37:
@@ -229,6 +226,11 @@ void execute(const CPUState &cur, CPUState &nxt) {
                         rs.ins.opcode, rs.ins.raw, rs.pc);
                 exit(1);
         }
+
+        // if (rs.pc >= 0x10f0 && rs.pc <= 0x1198) {
+        //     fprintf(stderr, "div exec: pc=0x%x op=0x%x rd=%u r1=%d r2=%d imm=%d res=%d\n",
+        //             rs.pc, rs.ins.opcode, rs.ins.rd, rs1, rs2, imm, result);
+        // }
 
         if (write_cdb) {
             //fprintf(stderr, "write cdb 0x%0x\n", rs.ins.raw);

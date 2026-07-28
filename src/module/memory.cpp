@@ -29,12 +29,14 @@ void memory(const CPUState &cur, CPUState &nxt) {
             }
             closest_store = j;
         }
-        if (!addr_safe) continue;
+        if (!addr_safe) {
+            //fprintf(stderr, "mem stall: rob=%zu addr=0x%x\n", lsq.rob_tag, lsq.addr);
+            continue;
+        }
         if (closest_store >= 0) {
             data_transfer = true;
             data = cur.lsq.buf[closest_store].data;
         }
-        if (!addr_safe) continue;
         if (data_transfer) {
             //fprintf(stderr, "mem fwd: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
             nxt.cdb.push(lsq.rob_tag, data);

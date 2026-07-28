@@ -52,7 +52,7 @@ auto decode(u32 raw) ->Instruction {
         .raw = raw,
         .opcode = opcode,
         .func3 = (raw >> 12) & 0x7,
-        .func7 = (raw >> 25) & 0x7,
+        .func7 = (raw >> 25) & 0x7F,
         .rd = (raw >> 7) & 0x1F,
         .rs1 = (raw >> 15) & 0x1F,
         .rs2 = (raw >> 20) & 0x1F,
@@ -75,8 +75,8 @@ void issue(const CPUState &cur, CPUState &nxt) {
         return;
     }
     // if (ins.rd == 10) {
-    //     fprintf(stderr, "issue to a0: pc=0x%x opcode=0x%x raw=0x%08x rob_tag=%zu\n",
-    //             cur.fetch.instruction_pc, ins.opcode, ins.raw, cur.rob.last);
+    //     fprintf(stderr, "issue to a0: pc=0x%x opcode=0x%x raw=0x%08x\n",
+    //             cur.fetch.instruction_pc, ins.opcode, ins.raw);
     // }
     if (nxt.rob.full()) {
         fprintf(stderr, "rob is full\n");

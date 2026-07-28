@@ -105,7 +105,7 @@ struct RATState {
 struct RSState {
     RSEntry buf[RS_SIZE];
     void push(const RSEntry &rs) {
-        fprintf(stderr, "rs push\n");
+        //fprintf(stderr, "rs push\n");
         auto find = false;
         for (int i = 0; i < RS_SIZE; i++) {
             if (!buf[i].valid) {
@@ -135,7 +135,7 @@ struct CDBState {
         }
     }
     void push(size_t rob_tag, u32 result) {
-        fprintf(stderr, "cdb push\n");
+        //fprintf(stderr, "cdb push\n");
         for (int j = 0; j < CDB_SIZE; j++) {
             if (!buf[j].valid) {
                 buf[j].valid = true;
@@ -153,7 +153,7 @@ struct LSQState {
     size_t last;
 
     auto push(const LSQEntry &lsq) -> size_t {
-        fprintf(stderr, "lsq push\n");
+        //fprintf(stderr, "lsq push\n");
         if ((last + 1) % LSQ_SIZE == head) {
             fprintf(stderr, "LSQ full\n");
             exit(1);
