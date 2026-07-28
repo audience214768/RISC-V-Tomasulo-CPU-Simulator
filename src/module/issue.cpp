@@ -4,24 +4,73 @@
 #include <cstdio>
 #include <cstdlib>
 
+static auto sign_extend(u32 val, u8 bits) -> u32 {
+    if (val & (1u << (bits - 1))) {
+        return val | (~((1u << bits) - 1));
+    }
+    return val & ((1u << bits) - 1);
+}
+
 auto decode(u32 raw) ->Instruction {
+    u32 opcode = raw & 0x7f;
+    u32 imm = 0;
+    switch (opcode) {
+        case 0x03: // LOAD: lb/lh/lw/lbu/lhu
+        case 0x13: // OP-IMM: addi/slti/sltiu/xori/ori/andi/slli/srli/srai
+        case 0x67: // JALR
+        case 0x73: // SYSTEM: ecall/ebreak
+            imm = sign_extend((raw >> 20) & 0xFFF, 12);
+            break;
+        case 0x23: // STORE: sb/sh/sw
+            imm = sign_extend(((raw >> 20) & 0xFE0) | ((raw >> 7) & 0x1F), 12);
+            break;
+        case 0x63: // BRANCH: beq/bne/blt/bge/bltu/bgeu
+            imm = sign_extend(
+                ((raw >> 19) & 0x1000) |
+                ((raw << 4)  & 0x0800) |
+                ((raw >> 20) & 0x07E0) |
+                ((raw >> 7)  & 0x001E),
+                13);
+            break;
+        case 0x37: // LUI
+        case 0x17: // AUIPC
+            imm = raw & 0xFFFFF000;
+            break;
+        case 0x6F: // JAL
+            imm = sign_extend(
+                ((raw >> 11) & 0x100000) |
+                ((raw >>  0) & 0x0FF000) |
+                ((raw >>  9) & 0x000800) |
+                ((raw >> 20) & 0x0007FE),
+                21);
+            break;
+        default: // 0x33 (R-type), 0x0F (FENCE) etc.
+            imm = 0;
+            break;
+    }
     return Instruction {
-        .opcode = raw & 0x7f,
+        .opcode = opcode,
         .func3 = (raw >> 12) & 0x7,
         .func7 = (raw >> 25) & 0x7,
         .rd = (raw >> 7) & 0x1F,
         .rs1 = (raw >> 15) & 0x1F,
         .rs2 = (raw >> 20) & 0x1F,
+        .imm = imm,
     };
 }
 
 void issue(const CPUState &cur, CPUState &nxt) {
+    if (cur.fetch.halt) return;
+
+    if (cur.fetch.mispredict || nxt.fetch.mispredict) return;
+    if (cur.fetch.pred_taken || nxt.fetch.pred_taken) return;
+
     auto ins = decode(cur.fetch.raw_instruction);
     if (nxt.rob.full()) {
         fprintf(stderr, "rob is full\n");
         exit(1);
     }
-    size_t lsq_tag;
+    size_t lsq_tag = 0;
     if (ins.opcode == 0x3 || ins.opcode == 0x23) {
         LSQEntry lsq = LSQEntry {
             .valid = true,
@@ -31,24 +80,25 @@ void issue(const CPUState &cur, CPUState &nxt) {
             .data_ready = false,
         };
         switch (ins.func3) {
-            case 0x0:
+            case 0x0: // lb / sb
                 lsq.width = 1;
                 lsq.is_unsigned = false;
                 break;
-            case 0x4:
-                lsq.width = 1;
-                lsq.is_unsigned = true;
-                break;
-            case 0x5:
-                lsq.width = 2;  
-                lsq.is_unsigned = false;          
-            case 0x1:
+            case 0x1: // lh / sh
                 lsq.width = 2;
-                lsq.is_unsigned = true;
+                lsq.is_unsigned = false;
                 break;
-            case 0x02:
+            case 0x2: // lw / sw
                 lsq.width = 4;
                 lsq.is_unsigned = false;
+                break;
+            case 0x4: // lbu
+                lsq.width = 1;
+                lsq.is_unsigned = true;
+                break;
+            case 0x5: // lhu
+                lsq.width = 2;
+                lsq.is_unsigned = true;
                 break;
         }
         lsq_tag = nxt.lsq.push(lsq);
@@ -114,6 +164,11 @@ void issue(const CPUState &cur, CPUState &nxt) {
                 }
             }
         }
+    }
+
+    if (ins.opcode == 0x6F) {
+        nxt.fetch.pred_taken  = true;
+        nxt.fetch.pred_target = cur.fetch.pc + ins.imm;
     }
 
     if (

@@ -70,15 +70,47 @@ static auto branch_cond(u32 func3, u32 rs1, u32 rs2) -> bool {
     }
 }
 
+static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
+    size_t flush_start = (branch_rob_tag + 1) % ROB_SIZE;
+    size_t flush_end   = nxt.rob.last;
+
+    auto in_range = [&](size_t tag) -> bool {
+        if (flush_start < flush_end)
+            return tag >= flush_start && tag < flush_end;
+        else
+            return tag >= flush_start || tag < flush_end;
+    };
+
+    nxt.rob.last = flush_start;
+
+    for (int i = 0; i < RS_SIZE; i++) {
+        if (nxt.rs.buf[i].valid && in_range(nxt.rs.buf[i].rob_tag)) {
+            nxt.rs.buf[i].valid = false;
+        }
+    }
+
+    for (int i = 0; i < LSQ_SIZE; i++) {
+        if (nxt.lsq.buf[i].valid && in_range(nxt.lsq.buf[i].rob_tag)) {
+            nxt.lsq.buf[i].valid = false;
+        }
+    }
+
+    for (int i = 0; i < 32; i++) {
+        if (nxt.rat.map[i] != NONE_ROB_TAG && in_range(nxt.rat.map[i])) {
+            nxt.rat.map[i] = NONE_ROB_TAG;
+        }
+    }
+}
+
 void execute(const CPUState &cur, CPUState &nxt) {
     for (int i = 0; i < RS_SIZE; i++) {
         const RSEntry &rs = cur.rs.buf[i];
-        u32 rs1; u32 rs2; u32 imm;
+        u32 rs1; u32 rs2; u32 imm = rs.ins.imm;
         if (!rs.valid) continue;
         if (!rs.ready1) {
             bool find = false;
             for (int j = 0; j < CDB_SIZE; j++) {
-                if (cur.cdb.buf[j].rob_tag == rs.ready1) {
+                if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs.query1) {
                     find = true;
                     rs1 = cur.cdb.buf[j].result;
                     break;
@@ -93,7 +125,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
         if (!rs.ready2) {
             bool find = false;
             for (int j = 0; j < CDB_SIZE; j++) {
-                if (cur.cdb.buf[j].rob_tag == rs.ready2) {
+                if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs.query2) {
                     find = true;
                     rs2 = cur.cdb.buf[j].result;
                     break;
@@ -124,7 +156,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 break;
             // ─── AUIPC (0x17) ───
             case 0x17:
-                result = 0;
+                result = rs.pc + imm;
                 break;
             // ─── LOAD (0x03) ───
             case 0x03:
@@ -155,23 +187,34 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 nxt.rob.buf[rs.rob_tag].ready = true;
                 write_cdb = false;
                 break;
-            // ─── BRANCH (0x63): 条件分支 ───
+            // ─── BRANCH (0x63): conditional ───
             case 0x63: {
                 bool taken = branch_cond(rs.ins.func3, rs1, rs2);
+                if (taken && !nxt.fetch.mispredict) {
+                    nxt.fetch.mispredict = true;
+                    nxt.fetch.correct_pc  = rs.pc + rs.ins.imm;
+                    flush_pipeline(nxt, rs.rob_tag);
+                }
                 write_cdb = false;
                 break;
             }
             // ─── JAL (0x6F) ───
             case 0x6F:
-                result = 0;
-                write_cdb = false;
+                result = rs.pc + 4;
+                write_cdb = true;
                 break;
             // ─── JALR (0x67) ───
-            case 0x67:
-                result = 0;
-                write_cdb = false;
+            case 0x67: {
+                u32 target = (rs1 + rs.ins.imm) & ~1u;
+                result = rs.pc + 4;
+                write_cdb = true;
+                if (!nxt.fetch.mispredict) {
+                    nxt.fetch.mispredict = true;
+                    nxt.fetch.correct_pc  = target;
+                    flush_pipeline(nxt, rs.rob_tag);
+                }
                 break;
-            // ─── FENCE / ECALL / EBREAK → 视为 NOP ───
+            }
             case 0x0F:
                 result = 0;
                 write_cdb = false;

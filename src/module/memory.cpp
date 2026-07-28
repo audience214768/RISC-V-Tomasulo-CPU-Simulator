@@ -1,10 +1,9 @@
 #include "module/memory.hpp"
 #include "utils/config.hpp"
 #include "utils/types.hpp"
-#include <array>
 
 
-void memory_access(const CPUState &cur, CPUState &nxt) {
+void memory(const CPUState &cur, CPUState &nxt) {
     for (int i = 0; i < LSQ_SIZE; i++) {
         const LSQEntry &lsq = cur.lsq.buf[i];
         if (!lsq.valid) continue;

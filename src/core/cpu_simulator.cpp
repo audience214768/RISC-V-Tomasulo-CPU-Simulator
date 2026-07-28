@@ -36,6 +36,10 @@ CPUSimulator::CPUSimulator() {
     state.rob.head = 0; state.rob.last = 0;
     state.rs.clear();
     state.rat.clear();
+    state.fetch.mispredict = false;
+    state.fetch.correct_pc   = 0;
+    state.fetch.pred_taken   = false;
+    state.fetch.pred_target  = 0;
 }
 
 void CPUSimulator::run() {
@@ -56,7 +60,9 @@ void CPUSimulator::tick() {
     commit(state, nxt);
     writeBack(state, nxt);
     memory(state, nxt);
-    execute(state, nxt);
     issue(state, nxt);
+    execute(state, nxt);
     fetch(state, nxt);
+    nxt.reg.reg[0] = 0;
+    state = nxt;
 }

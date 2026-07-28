@@ -20,10 +20,10 @@ void commit(const CPUState &cur, CPUState &nxt) {
             }
         }
         if (rob.ins.opcode == 0x23) {
-            nxt.memory.data[rob.address] = rob.result & 0x11;
-            nxt.memory.data[rob.address + 1] = (rob.result >> 8) & 0x11;
-            nxt.memory.data[rob.address + 2] = (rob.result >> 16) & 0x11;
-            nxt.memory.data[rob.address + 3] = (rob.result >> 24) & 0x11;
+            nxt.memory.data[rob.address] = rob.result & 0xFF;
+            nxt.memory.data[rob.address + 1] = (rob.result >> 8) & 0xFF;
+            nxt.memory.data[rob.address + 2] = (rob.result >> 16) & 0xFF;
+            nxt.memory.data[rob.address + 3] = (rob.result >> 24) & 0xFF;
             nxt.lsq.buf[rob.lsq_tag].valid = false;
         }
     }

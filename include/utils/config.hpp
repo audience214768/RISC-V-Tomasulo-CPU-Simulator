@@ -13,6 +13,7 @@ constexpr size_t RS_SIZE = 8;
 constexpr size_t LSQ_SIZE = 8;
 constexpr size_t CDB_SIZE = 4;
 constexpr size_t BUF_SIZE = 256 * 1024;
+constexpr size_t BHT_SIZE = 64;
 
 constexpr size_t NONE_ROB_TAG = ROB_SIZE + 1;
 

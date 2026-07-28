@@ -78,6 +78,9 @@ struct FetchState {
     u32 raw_instruction;
     bool halt;
     bool mispredict;
+    u32  correct_pc;   // mispredict recovery target (execute writes)
+    bool pred_taken;   // JAL redirect (issue writes, fetch reads next cycle)
+    u32  pred_target;  // JAL target PC (issue writes)
 };
 
 struct ROBState {
