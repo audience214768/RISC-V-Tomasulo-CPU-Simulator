@@ -33,10 +33,6 @@ void commit(const CPUState &cur, CPUState &nxt, MemState &memory) {
             rob.ins.opcode == 0x37     //lui
         ) {
             nxt.reg.reg[rob.ins.rd] = rob.result;
-            // if (rob.ins.rd == 10) {
-            //     fprintf(stderr, "write x10: commit_tag=%zu opcode=0x%x result=%d\n",
-            //             commit_tag, rob.ins.opcode, rob.result);
-            // }
             if (nxt.rat.map[rob.ins.rd] == commit_tag) {
                 nxt.rat.map[rob.ins.rd] = NONE_ROB_TAG;
             }

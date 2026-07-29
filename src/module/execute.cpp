@@ -70,20 +70,20 @@ static auto branch_cond(u32 func3, u32 rs1, u32 rs2) -> bool {
     }
 }
 
-static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
-    //fprintf(stderr, "flush\n");
+static void flush_pipeline(CPUState &nxt, const CPUState &cur, size_t branch_rob_tag) {
     size_t flush_start = (branch_rob_tag + 1) % ROB_SIZE;
     size_t flush_end   = nxt.rob.last;
 
     auto in_range = [&](size_t tag) -> bool {
-        if (flush_start < flush_end)
+        if (flush_start < flush_end) {
             return tag >= flush_start && tag < flush_end;
-        else
+        } else {
             return tag >= flush_start || tag < flush_end;
+        }
     };
 
     nxt.rob.last = flush_start;
-    nxt.fetch.pred_taken = false;  // kill spurious pred_taken from flushed instructions
+    nxt.fetch.pred_taken = false;
 
     for (int i = 0; i < RS_SIZE; i++) {
         if (nxt.rs.buf[i].valid && in_range(nxt.rs.buf[i].rob_tag)) {
@@ -97,10 +97,22 @@ static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
         }
     }
 
-    for (int i = 0; i < 32; i++) {
-        if (nxt.rat.map[i] != NONE_ROB_TAG && in_range(nxt.rat.map[i])) {
-            nxt.rat.map[i] = NONE_ROB_TAG;
+    const ROBEntry &branch = cur.rob.buf[branch_rob_tag];
+    auto rob_valid = [&](size_t tag) -> bool {
+        if (tag == NONE_ROB_TAG) { return false; }
+        size_t h = nxt.rob.head;
+        size_t t = nxt.rob.last;
+        if (h < t) { 
+            return tag >= h && tag < t; 
         }
+        else { 
+            return tag >= h || tag < t; 
+        }
+    };
+
+    for (int i = 0; i < 32; i++) {
+        size_t v = branch.rat_map[i];
+        nxt.rat.map[i] = rob_valid(v) ? v : NONE_ROB_TAG;
     }
 }
 
@@ -111,17 +123,32 @@ void execute(const CPUState &cur, CPUState &nxt) {
     while (true) {
         int oldest_i = -1;
         size_t oldest_dist = SIZE_MAX;
+        size_t jalr_tag = NONE_ROB_TAG;
         size_t jalr_dist = SIZE_MAX;
         for (int i = 0; i < RS_SIZE; i++) {
             if (processed[i]) continue;
-            if (!cur.rs.buf[i].valid) { processed[i] = true; continue; }
+            if (!cur.rs.buf[i].valid) {
+                 processed[i] = true; 
+                 continue; 
+            }
             size_t dist = (cur.rs.buf[i].rob_tag - cur.rob.head + ROB_SIZE) % ROB_SIZE;
             if (!cur.rs.buf[i].ready1 || !cur.rs.buf[i].ready2) {
-                if (cur.rs.buf[i].ins.opcode == 0x67 && dist < jalr_dist)
+                if (cur.rs.buf[i].ins.opcode == 0x67 && dist < jalr_dist) {
+                    jalr_tag = cur.rs.buf[i].rob_tag;
                     jalr_dist = dist;
+                }
                 continue;
             }
-            if (jalr_dist != SIZE_MAX && dist > jalr_dist) continue;
+            if (jalr_tag != NONE_ROB_TAG) {
+                size_t start = (jalr_tag + 1) % ROB_SIZE;
+                size_t end   = nxt.rob.last;
+                bool newer;
+                if (start < end)
+                    newer = cur.rs.buf[i].rob_tag >= start && cur.rs.buf[i].rob_tag < end;
+                else
+                    newer = cur.rs.buf[i].rob_tag >= start || cur.rs.buf[i].rob_tag < end;
+                if (newer) continue;
+            }
             if (dist < oldest_dist) {
                 oldest_i = i;
                 oldest_dist = dist;
@@ -157,6 +184,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 break;
             case 0x23:
                 result = rs1 + imm;
+                //if (rs.pc == 0x111c) fprintf(stderr, "SW ra: addr=0x%x val=0x%x\n", result, rs2);
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 nxt.lsq.buf[rs.lsq_tag].data_ready = true;
@@ -176,7 +204,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     nxt.fetch.mispredict = true;
                     nxt.fetch.correct_pc  = rs.pc + rs.ins.imm;
                     nxt.fetch.pred_taken = false;
-                    flush_pipeline(nxt, rs.rob_tag);
+                    flush_pipeline(nxt, cur, rs.rob_tag);
                     write_cdb = false;
                     mispredicted = true;
                 }
@@ -190,13 +218,14 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 break;
             case 0x67: {
                 u32 target = (rs1 + rs.ins.imm) & ~1u;
+                //if (rs.pc == 0x11d0) fprintf(stderr, "%0x \n", target);
                 result = rs.pc + 4;
                 write_cdb = true;
                 if (!nxt.fetch.mispredict) {
                     nxt.fetch.mispredict = true;
                     nxt.fetch.correct_pc  = target;
                     nxt.fetch.pred_taken = false;
-                    flush_pipeline(nxt, rs.rob_tag);
+                    flush_pipeline(nxt, cur, rs.rob_tag);
                     mispredicted = true;
                 }
                 break;

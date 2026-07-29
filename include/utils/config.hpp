@@ -8,7 +8,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef int32_t i32;
 
-constexpr size_t ROB_SIZE = 16;
+constexpr size_t ROB_SIZE = 32;
 constexpr size_t RS_SIZE = 16;
 constexpr size_t LSQ_SIZE = 16;
 constexpr size_t CDB_SIZE = 16;

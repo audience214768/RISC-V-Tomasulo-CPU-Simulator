@@ -17,7 +17,8 @@ void memory(const CPUState &cur, CPUState &nxt, const MemState &mem) {
         for (int j = cur.lsq.head; j != i; j = (j + 1) % LSQ_SIZE) {
             if (!cur.lsq.buf[j].valid) continue;
             if (cur.lsq.buf[j].is_load) continue;
-            if (!cur.lsq.buf[j].addr_ready) { addr_safe = false; break; }
+            if (!cur.lsq.buf[j].addr_ready) { 
+                addr_safe = false; break; }
             if (!cur.lsq.buf[j].data_ready && cur.lsq.buf[j].addr == lsq.addr) {
                 addr_safe = false; break;
             }
@@ -45,6 +46,8 @@ void memory(const CPUState &cur, CPUState &nxt, const MemState &mem) {
                     data |= ~((1u << (8 * lsq.width)) - 1);
             }
         }
+        // if (lsq.addr >= 0x1fe00 && lsq.addr <= 0x20000)
+        //     fprintf(stderr, "LD addr=0x%x val=%d rob=%zu\n", lsq.addr, data, lsq.rob_tag);
         nxt.cdb.push(lsq.rob_tag, data);
         nxt.lsq.buf[i].data = data;
         nxt.lsq.buf[i].data_ready = true;

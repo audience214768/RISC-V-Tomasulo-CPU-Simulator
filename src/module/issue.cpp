@@ -210,8 +210,15 @@ void issue(const CPUState &cur, CPUState &nxt) {
         .ready = false,
         .ins = ins,
         .result = 0,
-        .lsq_tag = lsq_tag
+        .lsq_tag = lsq_tag,
+        .has_snapshot = false,
     };
+    if (ins.opcode == 0x63 || ins.opcode == 0x67) {
+        for (int r = 0; r < 32; r++) {
+            nxt.rob.buf[cur.rob.last].rat_map[r] = cur.rat.map[r];
+        }
+        nxt.rob.buf[cur.rob.last].has_snapshot = true;
+    }
     nxt.rob.last = (cur.rob.last + 1) % ROB_SIZE;
 }
 

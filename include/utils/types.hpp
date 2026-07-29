@@ -25,10 +25,10 @@ struct LSQEntry {
 
     bool data_ready;
     u32 data;
-    int  mem_wait;  // load latency
 
     u8 width;
     bool is_unsigned;
+    int  mem_wait;  // load latency, at end to not perturb existing fields
 };
 
 struct ROBEntry {
@@ -39,6 +39,10 @@ struct ROBEntry {
     //store
     u32 address;
     size_t lsq_tag;
+
+    // RAT snapshot for branch recovery
+    bool   has_snapshot;
+    size_t rat_map[32];
 };
 
 struct RSEntry {
