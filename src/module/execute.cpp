@@ -105,66 +105,67 @@ static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
 }
 
 void execute(const CPUState &cur, CPUState &nxt) {
-    for (int i = 0; i < RS_SIZE; i++) {
-        const RSEntry &rs = cur.rs.buf[i];
-        if (!rs.valid) continue;
-        if (!rs.ready1 || !rs.ready2) continue;
+    bool processed[RS_SIZE] = {false};
+    bool mispredicted = false;
+
+    while (true) {
+        // Find the oldest ready RS entry by distance from rob.head.
+        // Raw rob_tag comparison breaks when tags wrap around ROB_SIZE.
+        int oldest_i = -1;
+        size_t oldest_dist = SIZE_MAX;
+        for (int i = 0; i < RS_SIZE; i++) {
+            if (processed[i]) continue;
+            if (!cur.rs.buf[i].valid) { processed[i] = true; continue; }
+            if (!cur.rs.buf[i].ready1 || !cur.rs.buf[i].ready2) continue;
+            size_t dist = (cur.rs.buf[i].rob_tag - cur.rob.head + ROB_SIZE) % ROB_SIZE;
+            if (dist < oldest_dist) {
+                oldest_i = i;
+                oldest_dist = dist;
+            }
+        }
+        if (oldest_i == -1) break;
+
+        processed[oldest_i] = true;
+        const RSEntry &rs = cur.rs.buf[oldest_i];
         u32 rs1 = rs.value1;
         u32 rs2 = rs.value2;
         u32 imm = rs.ins.imm;
         u32 result = 0;
         bool write_cdb = true;
-        bool free_rs   = true;
         switch (rs.ins.opcode) {
-            // ─── R-type ALU: OP (0x33) ───
             case 0x33:
                 result = ALU_R(rs.ins.func3, rs.ins.func7, rs1, rs2);
                 break;
-            // ─── I-type ALU: OP_IMM (0x13) ───
             case 0x13:
                 result = ALU_I(rs.ins.func3, rs.ins.func7, rs1, imm);
                 break;
-            // ─── LUI (0x37) ───
             case 0x37:
                 result = imm;
                 break;
-            // ─── AUIPC (0x17) ───
             case 0x17:
                 result = rs.pc + imm;
                 break;
-            // ─── LOAD (0x03) ───
             case 0x03:
                 result = rs1 + imm;
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 write_cdb = false;
                 break;
-            // ─── STORE (0x23) ───
             case 0x23:
                 result = rs1 + imm;
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 nxt.lsq.buf[rs.lsq_tag].data_ready = true;
                 switch (rs.ins.func3) {
-                    case 0x0:
-                        nxt.lsq.buf[rs.lsq_tag].data = rs2 & 0xFF;
-                        break;
-                    case 0x1:
-                        nxt.lsq.buf[rs.lsq_tag].data = rs2 & 0xFFFF;
-                        break;
-                    case 0x2:
-                        nxt.lsq.buf[rs.lsq_tag].data = rs2;
-                        break;
+                    case 0x0: nxt.lsq.buf[rs.lsq_tag].data = rs2 & 0xFF; break;
+                    case 0x1: nxt.lsq.buf[rs.lsq_tag].data = rs2 & 0xFFFF; break;
+                    case 0x2: nxt.lsq.buf[rs.lsq_tag].data = rs2; break;
                 }
-                // if (rs.ins.raw == 0x00e7a023) {
-                //     fprintf(stderr, "instruction 00e7a023 result = %d data = %d\n", result, rs2);
-                // }
                 nxt.rob.buf[rs.rob_tag].address = result;
                 nxt.rob.buf[rs.rob_tag].result = rs2;
                 nxt.rob.buf[rs.rob_tag].ready = true;
                 write_cdb = false;
                 break;
-            // ─── BRANCH (0x63): conditional ───
             case 0x63: {
                 bool taken = branch_cond(rs.ins.func3, rs1, rs2);
                 if (taken && !nxt.fetch.mispredict) {
@@ -172,17 +173,17 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     nxt.fetch.correct_pc  = rs.pc + rs.ins.imm;
                     nxt.fetch.pred_taken = false;
                     flush_pipeline(nxt, rs.rob_tag);
+                    write_cdb = false;
+                    mispredicted = true;
                 }
                 nxt.rob.buf[rs.rob_tag].ready = true;
                 write_cdb = false;
                 break;
             }
-            // ─── JAL (0x6F) ───
             case 0x6F:
                 result = rs.pc + 4;
                 write_cdb = true;
                 break;
-            // ─── JALR (0x67) ───
             case 0x67: {
                 u32 target = (rs1 + rs.ins.imm) & ~1u;
                 result = rs.pc + 4;
@@ -192,6 +193,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     nxt.fetch.correct_pc  = target;
                     nxt.fetch.pred_taken = false;
                     flush_pipeline(nxt, rs.rob_tag);
+                    mispredicted = true;
                 }
                 break;
             }
@@ -205,16 +207,11 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 exit(1);
         }
 
-        // if (rs.pc >= 0x10f0 && rs.pc <= 0x1198) {
-        //     fprintf(stderr, "div exec: pc=0x%x op=0x%x rd=%u r1=%d r2=%d imm=%d res=%d\n",
-        //             rs.pc, rs.ins.opcode, rs.ins.rd, rs1, rs2, imm, result);
-        // }
-
         if (write_cdb) {
-            //fprintf(stderr, "write cdb 0x%0x\n", rs.ins.raw);
             nxt.cdb.push(rs.rob_tag, result);
         }
+        nxt.rs.buf[oldest_i].valid = false;
 
-        nxt.rs.buf[i].valid = false;
+        if (mispredicted) break;
     }
 }

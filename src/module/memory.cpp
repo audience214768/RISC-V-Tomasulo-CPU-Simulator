@@ -46,6 +46,7 @@ void memory(const CPUState &cur, CPUState &nxt, const MemState &mem) {
             for (int j = 0; j < lsq.width; j++) {
                 data |= mem.buf[addr + j] << (8 * j);
             }
+            //fprintf(stderr, "load  addr=0x%x val=%d\n", addr, data);
             //if (addr == 0x123e) fprintf(stderr, "LBU @123e = %d (0x%x)\n", data, data);
             //if (addr == 0x1ff4c) fprintf(stderr, "LD sp+12: data=%d\n", data);
             //fprintf(stderr, "mem read: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
