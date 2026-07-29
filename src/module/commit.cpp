@@ -2,11 +2,25 @@
 #include "utils/config.hpp"
 #include "utils/types.hpp"
 
-void commit(const CPUState &cur, CPUState &nxt) {
+void commit(const CPUState &cur, CPUState &nxt, MemState &memory) {
     while (nxt.rob.head != nxt.rob.last && cur.rob.buf[nxt.rob.head].ready) {
         size_t commit_tag = nxt.rob.head;
         const ROBEntry &rob = cur.rob.buf[nxt.rob.head++];
         nxt.rob.head %= ROB_SIZE;
+
+        // resolve any RS entries still waiting for this tag
+        for (int j = 0; j < RS_SIZE; j++) {
+            if (nxt.rs.buf[j].valid && !nxt.rs.buf[j].ready1
+                && nxt.rs.buf[j].query1 == commit_tag) {
+                nxt.rs.buf[j].ready1 = true;
+                nxt.rs.buf[j].value1 = rob.result;
+            }
+            if (nxt.rs.buf[j].valid && !nxt.rs.buf[j].ready2
+                && nxt.rs.buf[j].query2 == commit_tag) {
+                nxt.rs.buf[j].ready2 = true;
+                nxt.rs.buf[j].value2 = rob.result;
+            }
+        }
         //fprintf(stderr, "commit rob_tag=%zu opcode=0x%x rd=%u result=0x%x head=%zu last=%zu\n",
         //        commit_tag, rob.ins.opcode, rob.ins.rd, rob.result, nxt.rob.head, nxt.rob.last);
         if (
@@ -31,10 +45,10 @@ void commit(const CPUState &cur, CPUState &nxt) {
             }
         }
         if (rob.ins.opcode == 0x23) {
-            nxt.memory.buf[rob.address] = rob.result & 0xFF;
-            nxt.memory.buf[rob.address + 1] = (rob.result >> 8) & 0xFF;
-            nxt.memory.buf[rob.address + 2] = (rob.result >> 16) & 0xFF;
-            nxt.memory.buf[rob.address + 3] = (rob.result >> 24) & 0xFF;
+            memory.buf[rob.address] = rob.result & 0xFF;
+            memory.buf[rob.address + 1] = (rob.result >> 8) & 0xFF;
+            memory.buf[rob.address + 2] = (rob.result >> 16) & 0xFF;
+            memory.buf[rob.address + 3] = (rob.result >> 24) & 0xFF;
             nxt.lsq.buf[rob.lsq_tag].valid = false;
         }
     }

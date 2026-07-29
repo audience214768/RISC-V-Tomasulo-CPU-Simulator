@@ -189,26 +189,7 @@ void issue(const CPUState &cur, CPUState &nxt) {
             }
         }
     }
-    for (int i = 0; i < RS_SIZE; i++) {
-        if (!cur.rs.buf[i].ready1) {
-            for (int j = 0; j < CDB_SIZE; j++) {
-                if (cur.cdb.buf[j].valid && cur.rs.buf[i].query1 == cur.cdb.buf[j].rob_tag) {
-                    nxt.rs.buf[i].ready1 = true;
-                    nxt.rs.buf[i].value1 = cur.cdb.buf[j].result;
-                    break;
-                }
-            }
-        }
-        if (!cur.rs.buf[i].ready2) {
-            for (int j = 0; j < CDB_SIZE; j++) {
-                if (cur.cdb.buf[j].valid && cur.rs.buf[i].query2 == cur.cdb.buf[j].rob_tag) {
-                    nxt.rs.buf[i].ready2 = true;
-                    nxt.rs.buf[i].value2 = cur.cdb.buf[j].result;
-                    break;
-                }
-            }
-        }
-    }
+    // existing RS entries are updated by writeBack's CDB snoop
     nxt.rs.push(rs_entry);
 
     if (ins.opcode == 0x6F) {

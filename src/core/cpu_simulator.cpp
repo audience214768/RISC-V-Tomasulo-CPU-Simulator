@@ -17,7 +17,7 @@ CPUSimulator::CPUSimulator() {
     std::string line;
     u32 address = 0;
     u32 offset = 0;
-    memset(state.memory.buf, 0, sizeof(state.memory.buf));
+    memset(mem.buf, 0, sizeof(mem.buf));
     memset(state.reg.reg, 0, sizeof(state.reg.reg));
     while(std::getline(std::cin, line)) {
         if (line[0] == '@') {
@@ -30,7 +30,7 @@ CPUSimulator::CPUSimulator() {
             std::string str_byte;
             while (ss >> str_byte) {
                 u8 data = static_cast<u8>(std::stoul(str_byte, nullptr, 16));
-                state.memory.buf[address + offset] = data;
+                mem.buf[address + offset] = data;
                 offset++;
             }
         }
@@ -66,17 +66,12 @@ void CPUSimulator::run() {
 
 void CPUSimulator::tick() {
     CPUState nxt = state;
-    commit(state, nxt);
-    //fprintf(stderr, "check1\n");
+    commit(state, nxt, mem);
     writeBack(state, nxt);
-    //fprintf(stderr, "check2\n");
-    memory(state, nxt);
-    //fprintf(stderr, "check3\n");
+    memory(state, nxt, mem);
     issue(state, nxt);
-    //fprintf(stderr, "check4\n");
     execute(state, nxt);
-    //fprintf(stderr, "check5\n");
-    fetch(state, nxt);
+    fetch(state, nxt, mem);
     nxt.reg.reg[0] = 0;
     state = nxt;
 }

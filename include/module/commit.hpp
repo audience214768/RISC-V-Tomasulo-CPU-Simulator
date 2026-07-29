@@ -2,4 +2,4 @@
 
 #include "utils/types.hpp"
 
-void commit(const CPUState &cur, CPUState &nxt);
+void commit(const CPUState &cur, CPUState &nxt, MemState &memory);

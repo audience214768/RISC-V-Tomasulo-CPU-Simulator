@@ -4,7 +4,7 @@
 #include <cstdio>
 
 
-void memory(const CPUState &cur, CPUState &nxt) {
+void memory(const CPUState &cur, CPUState &nxt, const MemState &mem) {
     for (int i = 0; i < LSQ_SIZE; i++) {
         const LSQEntry &lsq = cur.lsq.buf[i];
         if (!lsq.valid) continue;
@@ -44,8 +44,9 @@ void memory(const CPUState &cur, CPUState &nxt) {
         } else {
             u32 addr = lsq.addr;
             for (int j = 0; j < lsq.width; j++) {
-                data |= cur.memory.buf[addr + j] << (8 * j);
+                data |= mem.buf[addr + j] << (8 * j);
             }
+            //if (addr == 0x123e) fprintf(stderr, "LBU @123e = %d (0x%x)\n", data, data);
             //if (addr == 0x1ff4c) fprintf(stderr, "LD sp+12: data=%d\n", data);
             //fprintf(stderr, "mem read: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
             if (!lsq.is_unsigned && lsq.width < 4) {

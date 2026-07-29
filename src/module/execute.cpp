@@ -107,39 +107,11 @@ static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
 void execute(const CPUState &cur, CPUState &nxt) {
     for (int i = 0; i < RS_SIZE; i++) {
         const RSEntry &rs = cur.rs.buf[i];
-        u32 rs1; u32 rs2; u32 imm = rs.ins.imm;
         if (!rs.valid) continue;
-        //fprintf(stderr, "rsstate raw = 0x%0x rs1 = %d rs2 = %d\n", rs.ins.raw, rs.value1, rs.value2);
-        if (!rs.ready1) {
-            bool find = false;
-            for (int j = 0; j < CDB_SIZE; j++) {
-                if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs.query1) {
-                    find = true;
-                    rs1 = cur.cdb.buf[j].result;
-                    break;
-                }
-            }
-            if (!find) {
-                continue;
-            }
-        } else {
-            rs1 = rs.value1;
-        }
-        if (!rs.ready2) {
-            bool find = false;
-            for (int j = 0; j < CDB_SIZE; j++) {
-                if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs.query2) {
-                    find = true;
-                    rs2 = cur.cdb.buf[j].result;
-                    break;
-                }
-            }
-            if (!find) {
-                continue;
-            }
-        } else {
-            rs2 = rs.value2;
-        }
+        if (!rs.ready1 || !rs.ready2) continue;
+        u32 rs1 = rs.value1;
+        u32 rs2 = rs.value2;
+        u32 imm = rs.ins.imm;
         u32 result = 0;
         bool write_cdb = true;
         bool free_rs   = true;

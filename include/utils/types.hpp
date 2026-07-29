@@ -174,7 +174,7 @@ struct LSQState {
 };
 
 struct CPUState {
-    MemState memory;
+    // memory moved out to CPUSimulator — 256KB copy wasted per cycle
     RegState reg;
     FetchState fetch;
     ROBState rob;

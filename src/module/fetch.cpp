@@ -2,7 +2,7 @@
 #include <bit>
 #include <array>
 
-void fetch(const CPUState &cur, CPUState &nxt) {
+void fetch(const CPUState &cur, CPUState &nxt, const MemState &memory) {
     if (cur.fetch.halt) {
         return;
     }
@@ -19,10 +19,10 @@ void fetch(const CPUState &cur, CPUState &nxt) {
         addr = cur.fetch.pc;
     }
     nxt.fetch.raw_instruction = std::bit_cast<u32>(std::array<u8, 4>{
-        cur.memory.buf[addr],
-        cur.memory.buf[addr + 1],
-        cur.memory.buf[addr + 2],
-        cur.memory.buf[addr + 3],
+        memory.buf[addr],
+        memory.buf[addr + 1],
+        memory.buf[addr + 2],
+        memory.buf[addr + 3],
     });
     nxt.fetch.instruction_pc = addr;
     nxt.fetch.pc = addr + 4;
