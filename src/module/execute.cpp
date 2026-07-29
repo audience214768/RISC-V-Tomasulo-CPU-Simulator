@@ -99,7 +99,9 @@ static void flush_pipeline(CPUState &nxt, const CPUState &cur, size_t branch_rob
 
     const ROBEntry &branch = cur.rob.buf[branch_rob_tag];
     auto rob_valid = [&](size_t tag) -> bool {
-        if (tag == NONE_ROB_TAG) { return false; }
+        if (tag == NONE_ROB_TAG) { 
+            return false; 
+        }
         size_t h = nxt.rob.head;
         size_t t = nxt.rob.last;
         if (h < t) { 

@@ -69,17 +69,6 @@ void issue(const CPUState &cur, CPUState &nxt) {
     if (cur.fetch.raw_instruction == 0) return;
 
     auto ins = decode(cur.fetch.raw_instruction);
-    // if (cur.fetch.instruction_pc == 0x11ac) {
-    //     fprintf(stderr, "find the instruction raw = 0x%0x\n", ins.raw);
-    // }
-    //static int cnt888 = 0;
-    // if (cur.fetch.instruction_pc == 0x109c) {
-    //     fprintf(stderr, "ISSUE 888-store #%d: rob=%zu\n", ++cnt888, cur.rob.last);
-    // }
-
-    // if (cur.fetch.instruction_pc == 0x10a0) {
-    //     fprintf(stderr, "the a5 is %d\n", cur.reg.reg[15]);
-    // }
 
     if (cur.fetch.raw_instruction == TERMINATE_INST) {
         nxt.fetch.halt = true;

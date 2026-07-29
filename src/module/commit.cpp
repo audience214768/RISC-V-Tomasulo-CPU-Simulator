@@ -8,7 +8,6 @@ void commit(const CPUState &cur, CPUState &nxt, MemState &memory) {
         const ROBEntry &rob = cur.rob.buf[nxt.rob.head++];
         nxt.rob.head %= ROB_SIZE;
 
-        // resolve any RS entries still waiting for this tag
         for (int j = 0; j < RS_SIZE; j++) {
             if (nxt.rs.buf[j].valid && !nxt.rs.buf[j].ready1
                 && nxt.rs.buf[j].query1 == commit_tag) {

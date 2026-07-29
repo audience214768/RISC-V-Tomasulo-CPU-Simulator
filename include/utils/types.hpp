@@ -28,7 +28,7 @@ struct LSQEntry {
 
     u8 width;
     bool is_unsigned;
-    int  mem_wait;  // load latency, at end to not perturb existing fields
+    int  mem_wait;  // load latency
 };
 
 struct ROBEntry {
