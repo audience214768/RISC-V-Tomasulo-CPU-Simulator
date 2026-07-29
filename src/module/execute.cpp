@@ -146,6 +146,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
             // ─── R-type ALU: OP (0x33) ───
             case 0x33:
                 result = ALU_R(rs.ins.func3, rs.ins.func7, rs1, rs2);
+                //if (rs.pc == 0x1008) fprintf(stderr, "XOR exec: rs1=%d rs2=%d -> %d\n", rs1, rs2, result);
                 break;
             // ─── I-type ALU: OP_IMM (0x13) ───
             case 0x13:
@@ -167,7 +168,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 write_cdb = false;
                 break;
             // ─── STORE (0x23) ───
-            case 0x23:
+            case 0x23: //目前没有实现分布计算
                 result = rs1 + imm;
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
@@ -183,6 +184,9 @@ void execute(const CPUState &cur, CPUState &nxt) {
                         nxt.lsq.buf[rs.lsq_tag].data = rs2;
                         break;
                 }
+                // if (rs.ins.raw == 0x00e7a023) {
+                //     fprintf(stderr, "instruction 00e7a023 result = %d data = %d\n", result, rs2);
+                // }
                 nxt.rob.buf[rs.rob_tag].address = result;
                 nxt.rob.buf[rs.rob_tag].result = rs2;
                 nxt.rob.buf[rs.rob_tag].ready = true;
@@ -194,6 +198,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 if (taken && !nxt.fetch.mispredict) {
                     nxt.fetch.mispredict = true;
                     nxt.fetch.correct_pc  = rs.pc + rs.ins.imm;
+                    nxt.fetch.pred_taken = false;
                     flush_pipeline(nxt, rs.rob_tag);
                 }
                 nxt.rob.buf[rs.rob_tag].ready = true;
@@ -213,6 +218,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 if (!nxt.fetch.mispredict) {
                     nxt.fetch.mispredict = true;
                     nxt.fetch.correct_pc  = target;
+                    nxt.fetch.pred_taken = false;
                     flush_pipeline(nxt, rs.rob_tag);
                 }
                 break;

@@ -59,7 +59,7 @@ void CPUSimulator::run() {
         }
         clock++;
         tick();
-        //fprintf(stderr, "pc = %08x\n", state.fetch.pc);
+        fprintf(stderr, "clock = %d pc = 0x%0x\n", clock, state.fetch.pc);
     }
     fprintf(stdout, "%d\n", ret);
 }

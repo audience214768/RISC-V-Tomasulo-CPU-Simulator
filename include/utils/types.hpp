@@ -135,15 +135,16 @@ struct CDBState {
         }
     }
     void push(size_t rob_tag, u32 result) {
-        //fprintf(stderr, "cdb push\n");
         for (int j = 0; j < CDB_SIZE; j++) {
             if (!buf[j].valid) {
                 buf[j].valid = true;
                 buf[j].rob_tag = rob_tag;
                 buf[j].result = result;
-                break;
+                return;
             }
         }
+        fprintf(stderr, "CDB FULL! lost rob=%zu val=%d\n", rob_tag, result);
+        exit(1);
     }
 };
 

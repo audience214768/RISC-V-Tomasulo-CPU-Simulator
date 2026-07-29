@@ -11,6 +11,7 @@ void memory(const CPUState &cur, CPUState &nxt) {
         //fprintf(stderr, "lsq state valid=%d addr_ready=%d is_load=%d\n", lsq.valid, lsq.addr_ready, lsq.is_load);
         if (!lsq.addr_ready) continue;
         if (!lsq.is_load) continue;
+        if (lsq.data_ready) continue;
         bool addr_safe = true;
         bool data_transfer = false;
         u32 data = 0;
@@ -45,13 +46,16 @@ void memory(const CPUState &cur, CPUState &nxt) {
             for (int j = 0; j < lsq.width; j++) {
                 data |= cur.memory.data[addr + j] << (8 * j);
             }
-            if (!lsq.is_unsigned) {
+            //fprintf(stderr, "mem read: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
+            if (!lsq.is_unsigned && lsq.width < 4) {
                 if (data & (1 << (8 * lsq.width - 1))) {
-                    data |= ~((1u << 8 * lsq.width) - 1);
+                    data |= ~((1u << (8 * lsq.width)) - 1);
                 }
             }
             //fprintf(stderr, "mem read: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
             nxt.cdb.push(lsq.rob_tag, data);
         }
+        nxt.lsq.buf[i].data = data;
+        nxt.lsq.buf[i].data_ready = true;
     }
 }
