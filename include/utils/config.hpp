@@ -19,3 +19,5 @@ constexpr size_t NONE_ROB_TAG = ROB_SIZE + 1;
 
 constexpr u32 TERMINATE_INST = 0x0ff00513;
 
+constexpr int MEM_LATENCY = 3;
+

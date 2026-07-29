@@ -110,14 +110,23 @@ void execute(const CPUState &cur, CPUState &nxt) {
 
     while (true) {
         // Find the oldest ready RS entry by distance from rob.head.
-        // Raw rob_tag comparison breaks when tags wrap around ROB_SIZE.
+        // Also track the oldest unready JALR — no younger entry may
+        // execute past an unresolved indirect jump (it would be wrong-path).
         int oldest_i = -1;
         size_t oldest_dist = SIZE_MAX;
+        size_t jalr_dist = SIZE_MAX;
         for (int i = 0; i < RS_SIZE; i++) {
             if (processed[i]) continue;
             if (!cur.rs.buf[i].valid) { processed[i] = true; continue; }
-            if (!cur.rs.buf[i].ready1 || !cur.rs.buf[i].ready2) continue;
             size_t dist = (cur.rs.buf[i].rob_tag - cur.rob.head + ROB_SIZE) % ROB_SIZE;
+            if (!cur.rs.buf[i].ready1 || !cur.rs.buf[i].ready2) {
+                if (cur.rs.buf[i].ins.opcode == 0x67 && dist < jalr_dist)
+                    jalr_dist = dist;
+                continue;
+            }
+            // Don't pick a ready entry if an older JALR hasn't resolved yet:
+            // it would be on the wrong path and get flushed later.
+            if (jalr_dist != SIZE_MAX && dist > jalr_dist) continue;
             if (dist < oldest_dist) {
                 oldest_i = i;
                 oldest_dist = dist;

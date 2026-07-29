@@ -98,6 +98,7 @@ void issue(const CPUState &cur, CPUState &nxt) {
             .rob_tag = cur.rob.last,
             .addr_ready = false,
             .data_ready = false,
+            .mem_wait = 0,
         };
         switch (ins.func3) {
             case 0x0: // lb / sb
