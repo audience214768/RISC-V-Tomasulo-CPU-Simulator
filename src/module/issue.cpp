@@ -189,8 +189,6 @@ void issue(const CPUState &cur, CPUState &nxt) {
             }
         }
     }
-    nxt.rs.push(rs_entry);
-
     for (int i = 0; i < RS_SIZE; i++) {
         if (!cur.rs.buf[i].ready1) {
             for (int j = 0; j < CDB_SIZE; j++) {
@@ -211,6 +209,7 @@ void issue(const CPUState &cur, CPUState &nxt) {
             }
         }
     }
+    nxt.rs.push(rs_entry);
 
     if (ins.opcode == 0x6F) {
         nxt.fetch.pred_taken  = true;

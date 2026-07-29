@@ -83,6 +83,7 @@ static void flush_pipeline(CPUState &nxt, size_t branch_rob_tag) {
     };
 
     nxt.rob.last = flush_start;
+    nxt.fetch.pred_taken = false;  // kill spurious pred_taken from flushed instructions
 
     for (int i = 0; i < RS_SIZE; i++) {
         if (nxt.rs.buf[i].valid && in_range(nxt.rs.buf[i].rob_tag)) {
@@ -146,7 +147,6 @@ void execute(const CPUState &cur, CPUState &nxt) {
             // ─── R-type ALU: OP (0x33) ───
             case 0x33:
                 result = ALU_R(rs.ins.func3, rs.ins.func7, rs1, rs2);
-                //if (rs.pc == 0x1008) fprintf(stderr, "XOR exec: rs1=%d rs2=%d -> %d\n", rs1, rs2, result);
                 break;
             // ─── I-type ALU: OP_IMM (0x13) ───
             case 0x13:
@@ -168,7 +168,7 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 write_cdb = false;
                 break;
             // ─── STORE (0x23) ───
-            case 0x23: //目前没有实现分布计算
+            case 0x23:
                 result = rs1 + imm;
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;

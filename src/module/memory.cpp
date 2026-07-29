@@ -46,6 +46,7 @@ void memory(const CPUState &cur, CPUState &nxt) {
             for (int j = 0; j < lsq.width; j++) {
                 data |= cur.memory.buf[addr + j] << (8 * j);
             }
+            //if (addr == 0x1ff4c) fprintf(stderr, "LD sp+12: data=%d\n", data);
             //fprintf(stderr, "mem read: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
             if (!lsq.is_unsigned && lsq.width < 4) {
                 if (data & (1 << (8 * lsq.width - 1))) {
