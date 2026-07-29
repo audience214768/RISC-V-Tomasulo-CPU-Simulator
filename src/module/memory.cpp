@@ -44,7 +44,7 @@ void memory(const CPUState &cur, CPUState &nxt) {
         } else {
             u32 addr = lsq.addr;
             for (int j = 0; j < lsq.width; j++) {
-                data |= cur.memory.data[addr + j] << (8 * j);
+                data |= cur.memory.buf[addr + j] << (8 * j);
             }
             //fprintf(stderr, "mem read: rob=%zu addr=0x%x data=%d\n", lsq.rob_tag, lsq.addr, data);
             if (!lsq.is_unsigned && lsq.width < 4) {

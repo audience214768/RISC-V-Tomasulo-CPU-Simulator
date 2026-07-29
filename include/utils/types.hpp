@@ -66,8 +66,7 @@ struct CDBEntry {
 };
 
 struct MemState {
-   u8 data[BUF_SIZE];
-   u8 code[BUF_SIZE];
+   u8 buf[BUF_SIZE];
 };
 
 struct RegState {

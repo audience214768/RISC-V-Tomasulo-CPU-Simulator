@@ -17,6 +17,8 @@ CPUSimulator::CPUSimulator() {
     std::string line;
     u32 address = 0;
     u32 offset = 0;
+    memset(state.memory.buf, 0, sizeof(state.memory.buf));
+    memset(state.reg.reg, 0, sizeof(state.reg.reg));
     while(std::getline(std::cin, line)) {
         if (line[0] == '@') {
             std::string str_addr = line.substr(1);
@@ -28,13 +30,11 @@ CPUSimulator::CPUSimulator() {
             std::string str_byte;
             while (ss >> str_byte) {
                 u8 data = static_cast<u8>(std::stoul(str_byte, nullptr, 16));
-                state.memory.code[address + offset] = data;
+                state.memory.buf[address + offset] = data;
                 offset++;
             }
         }
     }
-    memset(state.memory.data, 0, sizeof(state.memory.data));
-    memset(state.reg.reg, 0, sizeof(state.reg.reg));
     state.rob.head = 0; state.rob.last = 0;
     state.rs.clear();
     state.rat.clear();
@@ -59,7 +59,7 @@ void CPUSimulator::run() {
         }
         clock++;
         tick();
-        fprintf(stderr, "clock = %d pc = 0x%0x\n", clock, state.fetch.pc);
+        //fprintf(stderr, "clock = %d pc = 0x%0x\n", clock, state.fetch.pc);
     }
     fprintf(stdout, "%d\n", ret);
 }
