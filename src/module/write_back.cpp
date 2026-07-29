@@ -10,7 +10,6 @@ void writeBack(const CPUState &cur, CPUState &nxt) {
             nxt.rob.buf[tag].ready = true;
             nxt.rob.buf[tag].result = result;
 
-            // CDB snoop: all RS entries capture matching tags
             for (int j = 0; j < RS_SIZE; j++) {
                 if (cur.rs.buf[j].valid && !cur.rs.buf[j].ready1
                     && cur.rs.buf[j].query1 == tag) {

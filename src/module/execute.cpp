@@ -109,9 +109,6 @@ void execute(const CPUState &cur, CPUState &nxt) {
     bool mispredicted = false;
 
     while (true) {
-        // Find the oldest ready RS entry by distance from rob.head.
-        // Also track the oldest unready JALR — no younger entry may
-        // execute past an unresolved indirect jump (it would be wrong-path).
         int oldest_i = -1;
         size_t oldest_dist = SIZE_MAX;
         size_t jalr_dist = SIZE_MAX;
@@ -124,8 +121,6 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     jalr_dist = dist;
                 continue;
             }
-            // Don't pick a ready entry if an older JALR hasn't resolved yet:
-            // it would be on the wrong path and get flushed later.
             if (jalr_dist != SIZE_MAX && dist > jalr_dist) continue;
             if (dist < oldest_dist) {
                 oldest_i = i;

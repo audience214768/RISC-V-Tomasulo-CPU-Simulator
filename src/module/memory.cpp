@@ -12,7 +12,6 @@ void memory(const CPUState &cur, CPUState &nxt, const MemState &mem) {
         if (!lsq.is_load) continue;
         if (lsq.data_ready) continue;
 
-        // Check store-to-load ordering: any older unresolved store?
         bool addr_safe = true;
         int closest_store = -1;
         for (int j = cur.lsq.head; j != i; j = (j + 1) % LSQ_SIZE) {
@@ -29,13 +28,11 @@ void memory(const CPUState &cur, CPUState &nxt, const MemState &mem) {
             continue;
         }
 
-        // Start or continue the memory latency countdown
         int &wait = nxt.lsq.buf[i].mem_wait;
         if (wait == 0) wait = MEM_LATENCY;
         wait--;
         if (wait > 0) continue;
 
-        // Latency elapsed: perform the load
         u32 data = 0;
         if (closest_store >= 0) {
             data = cur.lsq.buf[closest_store].data;

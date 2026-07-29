@@ -190,7 +190,6 @@ void issue(const CPUState &cur, CPUState &nxt) {
             }
         }
     }
-    // existing RS entries are updated by writeBack's CDB snoop
     nxt.rs.push(rs_entry);
 
     if (ins.opcode == 0x6F) {
