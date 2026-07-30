@@ -1,50 +1,44 @@
 #include "module/commit.hpp"
 #include "utils/config.hpp"
 #include "utils/types.hpp"
+#include <cstdio>
 
 void commit(const CPUState &cur, CPUState &nxt, MemState &memory) {
-    while (nxt.rob.head != nxt.rob.last && cur.rob.buf[nxt.rob.head].ready) {
+    while (nxt.rob.head != cur.rob.last && cur.rob.buf[nxt.rob.head].ready) {
         size_t commit_tag = nxt.rob.head;
-        const ROBEntry &rob = cur.rob.buf[nxt.rob.head++];
-        nxt.rob.head %= ROB_SIZE;
+        const ROBEntry &rob = cur.rob.buf[commit_tag];
+        nxt.rob.head = (nxt.rob.head + 1) % ROB_SIZE;
 
-        for (int j = 0; j < RS_SIZE; j++) {
-            if (nxt.rs.buf[j].valid && !nxt.rs.buf[j].ready1
-                && nxt.rs.buf[j].query1 == commit_tag) {
-                nxt.rs.buf[j].ready1 = true;
-                nxt.rs.buf[j].value1 = rob.result;
-            }
-            if (nxt.rs.buf[j].valid && !nxt.rs.buf[j].ready2
-                && nxt.rs.buf[j].query2 == commit_tag) {
-                nxt.rs.buf[j].ready2 = true;
-                nxt.rs.buf[j].value2 = rob.result;
-            }
-        }
-        //fprintf(stderr, "commit rob_tag=%zu opcode=0x%x rd=%u result=0x%x head=%zu last=%zu\n",
-        //        commit_tag, rob.ins.opcode, rob.ins.rd, rob.result, nxt.rob.head, nxt.rob.last);
-        if (
-            rob.ins.opcode == 0x33 ||  //ALU_R
-            rob.ins.opcode == 0x13 ||  //ALU_I
-            rob.ins.opcode == 0x3 ||   //load
-            rob.ins.opcode == 0x6F ||  //jal
-            rob.ins.opcode == 0x67 ||  //jalr
-            rob.ins.opcode == 0x17 ||  //auipc
-            rob.ins.opcode == 0x37     //lui
-        ) {
-            nxt.reg.reg[rob.ins.rd] = rob.result;
-            if (nxt.rat.map[rob.ins.rd] == commit_tag) {
-                nxt.rat.map[rob.ins.rd] = NONE_ROB_TAG;
-            }
-            if (rob.ins.opcode == 0x3) {
-                nxt.lsq.buf[rob.lsq_tag].valid = false;
+        u8 opcode = rob.ins.opcode;
+        u8 rd     = rob.ins.rd;
+
+        if (rd != 0 && (
+            opcode == 0x33 || // ALU_R
+            opcode == 0x13 || // ALU_I
+            opcode == 0x03 || // Load
+            opcode == 0x6F || // JAL
+            opcode == 0x67 || // JALR
+            opcode == 0x17 || // AUIPC
+            opcode == 0x37    // LUI
+        )) {
+            if (rob.new_pnum) {
+                nxt.free_list.push(rob.old_pnum);
             }
         }
-        if (rob.ins.opcode == 0x23) {
-            memory.buf[rob.address] = rob.result & 0xFF;
-            memory.buf[rob.address + 1] = (rob.result >> 8) & 0xFF;
-            memory.buf[rob.address + 2] = (rob.result >> 16) & 0xFF;
-            memory.buf[rob.address + 3] = (rob.result >> 24) & 0xFF;
-            nxt.lsq.buf[rob.lsq_tag].valid = false;
+
+        if (opcode == 0x23) {
+            size_t lsq_idx = rob.lsq_tag;
+            const LSQEntry &lsq = cur.lsq.buf[lsq_idx];
+
+            u32 addr = lsq.addr;
+            u32 data = lsq.data;
+            int width = lsq.width;
+
+            for (int w = 0; w < width; w++) {
+                memory.buf[addr + w] = (data >> (8 * w)) & 0xFF;
+            }
+
+            nxt.lsq.buf[lsq_idx].valid = false;
         }
     }
     while (nxt.lsq.head != nxt.lsq.last && !nxt.lsq.buf[nxt.lsq.head].valid) {

@@ -1,29 +1,25 @@
 #include "module/write_back.hpp"
 #include "utils/config.hpp"
 #include "utils/types.hpp"
+#include <cstdio>
 
 void writeBack(const CPUState &cur, CPUState &nxt) {
     for (int i = 0; i < CDB_SIZE; i++) {
-        if (cur.cdb.buf[i].valid) {
-            size_t tag = cur.cdb.buf[i].rob_tag;
-            u32 result = cur.cdb.buf[i].result;
-            nxt.rob.buf[tag].ready = true;
-            nxt.rob.buf[tag].result = result;
+        if (!cur.cdb.buf[i].valid) continue;
 
-            for (int j = 0; j < RS_SIZE; j++) {
-                if (cur.rs.buf[j].valid && !cur.rs.buf[j].ready1
-                    && cur.rs.buf[j].query1 == tag) {
-                    nxt.rs.buf[j].ready1 = true;
-                    nxt.rs.buf[j].value1 = result;
-                }
-                if (cur.rs.buf[j].valid && !cur.rs.buf[j].ready2
-                    && cur.rs.buf[j].query2 == tag) {
-                    nxt.rs.buf[j].ready2 = true;
-                    nxt.rs.buf[j].value2 = result;
-                }
-            }
+        PhysRegNum prd = cur.cdb.buf[i].prd;
+        size_t rob_tag = cur.cdb.buf[i].rob_tag;
+        u32 result = cur.cdb.buf[i].result;
 
-            nxt.cdb.buf[i].valid = false;
+        if (prd != 0) {
+            nxt.prf.values[prd] = result;
+            nxt.ready_table.ready[prd] = true;
         }
+
+        if (rob_tag != NONE_ROB_TAG) {
+            nxt.rob.buf[rob_tag].ready = true;
+        }
+
+        nxt.cdb.buf[i].valid = false;
     }
 }

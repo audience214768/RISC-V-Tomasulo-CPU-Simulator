@@ -4,26 +4,20 @@
 #include <cstdio>
 #include <cstdlib>
 
+size_t branch_count = 0;
+size_t mispredict_count = 0;
+
 static auto ALU_R(u32 func3, u32 func7, u32 rs1, u32 rs2) -> u32 {
     switch (func3) {
-        case 0x0: // ADD / SUB
-            return (func7 == 0) ? rs1 + rs2 : rs1 - rs2;
-        case 0x1: // SLL
-            return rs1 << (rs2 & 0x1F);
-        case 0x2: // SLT
-            return (i32)rs1 < (i32)rs2 ? 1 : 0;
-        case 0x3: // SLTU
-            return rs1 < rs2 ? 1 : 0;
-        case 0x4: // XOR
-            return rs1 ^ rs2;
-        case 0x5: // SRL / SRA
-            return (func7 == 0)
-                ? rs1 >> (rs2 & 0x1F)
-                : (u32)((i32)rs1 >> (rs2 & 0x1F));
-        case 0x6: // OR
-            return rs1 | rs2;
-        case 0x7: // AND
-            return rs1 & rs2;
+        case 0x0: return (func7 == 0) ? rs1 + rs2 : rs1 - rs2; // ADD / SUB
+        case 0x1: return rs1 << (rs2 & 0x1F);                   // SLL
+        case 0x2: return (i32)rs1 < (i32)rs2 ? 1 : 0;          // SLT
+        case 0x3: return rs1 < rs2 ? 1 : 0;                    // SLTU
+        case 0x4: return rs1 ^ rs2;                            // XOR
+        case 0x5: return (func7 == 0) ? rs1 >> (rs2 & 0x1F) 
+                                      : (u32)((i32)rs1 >> (rs2 & 0x1F)); // SRL / SRA
+        case 0x6: return rs1 | rs2;                            // OR
+        case 0x7: return rs1 & rs2;                            // AND
         default:
             fprintf(stderr, "invalid func3 for ALU_R: 0x%x\n", func3);
             exit(1);
@@ -32,24 +26,15 @@ static auto ALU_R(u32 func3, u32 func7, u32 rs1, u32 rs2) -> u32 {
 
 static auto ALU_I(u32 func3, u32 func7, u32 rs1, u32 imm) -> u32 {
     switch (func3) {
-        case 0x0: // ADDI
-            return rs1 + imm;
-        case 0x1: // SLLI
-            return rs1 << (imm & 0x1F);
-        case 0x2: // SLTI
-            return (i32)rs1 < (i32)imm ? 1 : 0;
-        case 0x3: // SLTIU
-            return rs1 < imm ? 1 : 0;
-        case 0x4: // XORI
-            return rs1 ^ imm;
-        case 0x5: // SRLI / SRAI
-            return (func7 == 0)
-                ? rs1 >> (imm & 0x1F)
-                : (u32)((i32)rs1 >> (imm & 0x1F));
-        case 0x6: // ORI
-            return rs1 | imm;
-        case 0x7: // ANDI
-            return rs1 & imm;
+        case 0x0: return rs1 + imm;                            // ADDI
+        case 0x1: return rs1 << (imm & 0x1F);                  // SLLI
+        case 0x2: return (i32)rs1 < (i32)imm ? 1 : 0;          // SLTI
+        case 0x3: return rs1 < imm ? 1 : 0;                    // SLTIU
+        case 0x4: return rs1 ^ imm;                            // XORI
+        case 0x5: return (func7 == 0) ? rs1 >> (imm & 0x1F) 
+                                      : (u32)((i32)rs1 >> (imm & 0x1F)); // SRLI / SRAI
+        case 0x6: return rs1 | imm;                            // ORI
+        case 0x7: return rs1 & imm;                            // ANDI
         default:
             fprintf(stderr, "invalid func3 for ALU_I: 0x%x\n", func3);
             exit(1);
@@ -58,12 +43,12 @@ static auto ALU_I(u32 func3, u32 func7, u32 rs1, u32 imm) -> u32 {
 
 static auto branch_cond(u32 func3, u32 rs1, u32 rs2) -> bool {
     switch (func3) {
-        case 0x0: return rs1 == rs2;                  // BEQ
-        case 0x1: return rs1 != rs2;                  // BNE
-        case 0x4: return (i32)rs1 < (i32)rs2;         // BLT
-        case 0x5: return (i32)rs1 >= (i32)rs2;        // BGE
-        case 0x6: return rs1 < rs2;                   // BLTU
-        case 0x7: return rs1 >= rs2;                  // BGEU
+        case 0x0: return rs1 == rs2;           // BEQ
+        case 0x1: return rs1 != rs2;           // BNE
+        case 0x4: return (i32)rs1 < (i32)rs2;  // BLT
+        case 0x5: return (i32)rs1 >= (i32)rs2; // BGE
+        case 0x6: return rs1 < rs2;            // BLTU
+        case 0x7: return rs1 >= rs2;           // BGEU
         default:
             fprintf(stderr, "invalid func3 for branch: 0x%x\n", func3);
             exit(1);
@@ -82,6 +67,18 @@ static void flush_pipeline(CPUState &nxt, const CPUState &cur, size_t branch_rob
         }
     };
 
+    size_t curr_tag = (flush_end + ROB_SIZE - 1) % ROB_SIZE;
+    while (curr_tag != branch_rob_tag) {
+        const ROBEntry &entry = nxt.rob.buf[curr_tag];
+        if (entry.arch_dest != 0 && entry.new_pnum != 0) {
+            nxt.rat.map[entry.arch_dest] = entry.old_pnum;
+            nxt.free_list.push(entry.new_pnum);
+            nxt.ready_table.ready[entry.new_pnum] = false;
+        }
+        if (curr_tag == flush_start) break;
+        curr_tag = (curr_tag + ROB_SIZE - 1) % ROB_SIZE;
+    }
+
     nxt.rob.last = flush_start;
     nxt.fetch.pred_taken = false;
 
@@ -96,51 +93,62 @@ static void flush_pipeline(CPUState &nxt, const CPUState &cur, size_t branch_rob
             nxt.lsq.buf[i].valid = false;
         }
     }
+}
 
-    const ROBEntry &branch = cur.rob.buf[branch_rob_tag];
-    auto rob_valid = [&](size_t tag) -> bool {
-        if (tag == NONE_ROB_TAG) { 
-            return false; 
-        }
-        size_t h = nxt.rob.head;
-        size_t t = nxt.rob.last;
-        if (h < t) { 
-            return tag >= h && tag < t; 
-        }
-        else { 
-            return tag >= h || tag < t; 
-        }
-    };
-
-    for (int i = 0; i < 32; i++) {
-        size_t v = branch.rat_map[i];
-        nxt.rat.map[i] = rob_valid(v) ? v : NONE_ROB_TAG;
+static bool fetchOperand(const CPUState &cur, PhysRegNum prs, u32 &out_val) {
+    if (prs == 0) {
+        out_val = 0;
+        return true;
     }
+
+    for (int c = 0; c < CDB_SIZE; c++) {
+        if (cur.cdb.buf[c].valid && cur.cdb.buf[c].prd == prs) {
+            out_val = cur.cdb.buf[c].result;
+            return true;
+        }
+    }
+
+    if (cur.ready_table.ready[prs]) {
+        out_val = cur.prf.values[prs];
+        return true;
+    }
+
+    out_val = 0;
+    return false;
 }
 
 void execute(const CPUState &cur, CPUState &nxt) {
     bool processed[RS_SIZE] = {false};
     bool mispredicted = false;
 
-    while (true) {
+    int alu_exec_count = 0;
+    const int MAX_ALU_EXEC = 2;
+
+    while (alu_exec_count < MAX_ALU_EXEC) {
         int oldest_i = -1;
         size_t oldest_dist = SIZE_MAX;
         size_t jalr_tag = NONE_ROB_TAG;
         size_t jalr_dist = SIZE_MAX;
+
         for (int i = 0; i < RS_SIZE; i++) {
             if (processed[i]) continue;
+
             if (!cur.rs.buf[i].valid) {
-                 processed[i] = true; 
-                 continue; 
+                processed[i] = true; 
+                continue; 
             }
+            //if (cur.rs.buf[i].pc == 0x1008) fprintf(stderr, "in RS %d %d\n", cur.ready_table.ready[cur.rs.buf[i].prs1], cur.ready_table.ready[cur.rs.buf[i].prs2]);
+
             size_t dist = (cur.rs.buf[i].rob_tag - cur.rob.head + ROB_SIZE) % ROB_SIZE;
-            if (!cur.rs.buf[i].ready1 || !cur.rs.buf[i].ready2) {
+            u32 tmp;
+            if (!fetchOperand(cur, cur.rs.buf[i].prs1, tmp) || !fetchOperand(cur, cur.rs.buf[i].prs2, tmp)) {
                 if (cur.rs.buf[i].ins.opcode == 0x67 && dist < jalr_dist) {
                     jalr_tag = cur.rs.buf[i].rob_tag;
                     jalr_dist = dist;
                 }
                 continue;
             }
+
             if (jalr_tag != NONE_ROB_TAG) {
                 size_t start = (jalr_tag + 1) % ROB_SIZE;
                 size_t end   = nxt.rob.last;
@@ -149,44 +157,58 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     newer = cur.rs.buf[i].rob_tag >= start && cur.rs.buf[i].rob_tag < end;
                 else
                     newer = cur.rs.buf[i].rob_tag >= start || cur.rs.buf[i].rob_tag < end;
+                
                 if (newer) continue;
             }
+
             if (dist < oldest_dist) {
                 oldest_i = i;
                 oldest_dist = dist;
             }
         }
+
         if (oldest_i == -1) break;
 
         processed[oldest_i] = true;
         const RSEntry &rs = cur.rs.buf[oldest_i];
-        u32 rs1 = rs.value1;
-        u32 rs2 = rs.value2;
+
+        u32 rs1 = 0, rs2 = 0;
+        fetchOperand(cur, rs.prs1, rs1);
+        fetchOperand(cur, rs.prs2, rs2);
+
         u32 imm = rs.ins.imm;
         u32 result = 0;
         bool write_cdb = true;
+
+        //if (rs.pc == 0x1008) fprintf(stderr, "exe\n");
+
+
         switch (rs.ins.opcode) {
-            case 0x33:
+            case 0x33: // R-type ALU
                 result = ALU_R(rs.ins.func3, rs.ins.func7, rs1, rs2);
                 break;
-            case 0x13:
+
+            case 0x13: // I-type ALU
                 result = ALU_I(rs.ins.func3, rs.ins.func7, rs1, imm);
                 break;
-            case 0x37:
+
+            case 0x37: // LUI
                 result = imm;
                 break;
-            case 0x17:
+
+            case 0x17: // AUIPC
                 result = rs.pc + imm;
                 break;
-            case 0x03:
+
+            case 0x03: // Load
                 result = rs1 + imm;
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 write_cdb = false;
                 break;
-            case 0x23:
+
+            case 0x23: // Store
                 result = rs1 + imm;
-                //if (rs.pc == 0x111c) fprintf(stderr, "SW ra: addr=0x%x val=0x%x\n", result, rs2);
                 nxt.lsq.buf[rs.lsq_tag].addr_ready = true;
                 nxt.lsq.buf[rs.lsq_tag].addr = result;
                 nxt.lsq.buf[rs.lsq_tag].data_ready = true;
@@ -195,14 +217,15 @@ void execute(const CPUState &cur, CPUState &nxt) {
                     case 0x1: nxt.lsq.buf[rs.lsq_tag].data = rs2 & 0xFFFF; break;
                     case 0x2: nxt.lsq.buf[rs.lsq_tag].data = rs2; break;
                 }
-                nxt.rob.buf[rs.rob_tag].address = result;
-                nxt.rob.buf[rs.rob_tag].result = rs2;
                 nxt.rob.buf[rs.rob_tag].ready = true;
                 write_cdb = false;
                 break;
-            case 0x63: {
+
+            case 0x63: { // Branch
+                branch_count++;
                 bool taken = branch_cond(rs.ins.func3, rs1, rs2);
                 if (taken && !nxt.fetch.mispredict) {
+                    mispredict_count++;
                     nxt.fetch.mispredict = true;
                     nxt.fetch.correct_pc  = rs.pc + rs.ins.imm;
                     nxt.fetch.pred_taken = false;
@@ -214,13 +237,14 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 write_cdb = false;
                 break;
             }
-            case 0x6F:
+
+            case 0x6F: // JAL
                 result = rs.pc + 4;
                 write_cdb = true;
                 break;
-            case 0x67: {
+
+            case 0x67: { // JALR
                 u32 target = (rs1 + rs.ins.imm) & ~1u;
-                //if (rs.pc == 0x11d0) fprintf(stderr, "%0x \n", target);
                 result = rs.pc + 4;
                 write_cdb = true;
                 if (!nxt.fetch.mispredict) {
@@ -232,10 +256,12 @@ void execute(const CPUState &cur, CPUState &nxt) {
                 }
                 break;
             }
-            case 0x0F:
+
+            case 0x0F: // FENCE
                 result = 0;
                 write_cdb = false;
                 break;
+
             default:
                 fprintf(stderr, "unknown opcode in execute: 0x%x, raw=0x%08x pc=0x%08x\n",
                         rs.ins.opcode, rs.ins.raw, rs.pc);
@@ -243,9 +269,11 @@ void execute(const CPUState &cur, CPUState &nxt) {
         }
 
         if (write_cdb) {
-            nxt.cdb.push(rs.rob_tag, result);
+            nxt.cdb.push(rs.prd, result, rs.rob_tag);
         }
+
         nxt.rs.buf[oldest_i].valid = false;
+        alu_exec_count++;
 
         if (mispredicted) break;
     }

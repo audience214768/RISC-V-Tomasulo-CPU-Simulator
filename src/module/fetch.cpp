@@ -17,12 +17,14 @@ void fetch(const CPUState &cur, CPUState &nxt, const MemState &memory) {
     } else {
         addr = cur.fetch.pc;
     }
+    //fprintf(stderr, "check1 %0x\n", addr);
     nxt.fetch.raw_instruction = std::bit_cast<u32>(std::array<u8, 4>{
         memory.buf[addr],
         memory.buf[addr + 1],
         memory.buf[addr + 2],
         memory.buf[addr + 3],
     });
+
     nxt.fetch.instruction_pc = addr;
     nxt.fetch.pc = addr + 4;
 }

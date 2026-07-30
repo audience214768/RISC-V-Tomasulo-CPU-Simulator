@@ -2,7 +2,6 @@
 #include "utils/config.hpp"
 #include "utils/types.hpp"
 #include <cstdio>
-#include <cstdlib>
 
 static auto sign_extend(u32 val, u8 bits) -> u32 {
     if (val & (1u << (bits - 1))) {
@@ -11,20 +10,20 @@ static auto sign_extend(u32 val, u8 bits) -> u32 {
     return val & ((1u << bits) - 1);
 }
 
-auto decode(u32 raw) ->Instruction {
+auto decode(u32 raw) -> Instruction {
     u32 opcode = raw & 0x7f;
     u32 imm = 0;
     switch (opcode) {
-        case 0x03: // LOAD: lb/lh/lw/lbu/lhu
-        case 0x13: // OP-IMM: addi/slti/sltiu/xori/ori/andi/slli/srli/srai
+        case 0x03: // LOAD
+        case 0x13: // OP-IMM
         case 0x67: // JALR
-        case 0x73: // SYSTEM: ecall/ebreak
+        case 0x73: // SYSTEM
             imm = sign_extend((raw >> 20) & 0xFFF, 12);
             break;
-        case 0x23: // STORE: sb/sh/sw
+        case 0x23: // STORE
             imm = sign_extend(((raw >> 20) & 0xFE0) | ((raw >> 7) & 0x1F), 12);
             break;
-        case 0x63: // BRANCH: beq/bne/blt/bge/bltu/bgeu
+        case 0x63: // BRANCH
             imm = sign_extend(
                 ((raw >> 19) & 0x1000) |
                 ((raw << 4)  & 0x0800) |
@@ -44,7 +43,7 @@ auto decode(u32 raw) ->Instruction {
                 ((raw >> 20) & 0x0007FE),
                 21);
             break;
-        default: // 0x33 (R-type), 0x0F (FENCE) etc.
+        default:
             imm = 0;
             break;
     }
@@ -70,115 +69,90 @@ void issue(const CPUState &cur, CPUState &nxt) {
 
     auto ins = decode(cur.fetch.raw_instruction);
 
+    //fprintf(stderr, "%0x\n", cur.fetch.raw_instruction);
+
     if (cur.fetch.raw_instruction == TERMINATE_INST) {
         nxt.fetch.halt = true;
+        //fprintf(stderr, "halt");
         return;
     }
-    if (nxt.rob.full()) {
-        fprintf(stderr, "rob is full\n");
-        exit(1);
+
+    bool writes_rf = (ins.opcode != 0x23 && // Store
+                      ins.opcode != 0x63 && // Branch
+                      ins.opcode != 0x73 && // System
+                      ins.rd != 0);         // x0 always 0
+
+    bool is_mem_op = (ins.opcode == 0x3 || ins.opcode == 0x23); // Load / Store
+
+    bool rob_full = cur.rob.full();
+
+    bool rs_full = cur.rs.full();
+    
+    bool freelist_full = writes_rf && cur.free_list.empty();
+
+    bool lsq_full = is_mem_op && cur.lsq.full();
+
+    if (rob_full || rs_full || freelist_full || lsq_full) {
+        nxt.fetch = cur.fetch;
+        
+        nxt.rat = cur.rat;
+        nxt.free_list = cur.free_list;
+
+        return;
     }
+
     size_t lsq_tag = 0;
-    //fprintf(stderr, "check\n");
-    if (ins.opcode == 0x3 || ins.opcode == 0x23) {
+    if (is_mem_op) {
+        PhysRegNum prs2_or_prd = (ins.opcode == 0x23) ? cur.rat.map[ins.rs2] : 0;
+
         LSQEntry lsq = LSQEntry {
             .valid = true,
             .is_load = (ins.opcode == 0x3),
             .rob_tag = cur.rob.last,
             .addr_ready = false,
             .data_ready = false,
+            .prs2_or_prd = prs2_or_prd,
+            .data = 0,
             .mem_wait = 0,
         };
         switch (ins.func3) {
-            case 0x0: // lb / sb
-                lsq.width = 1;
-                lsq.is_unsigned = false;
-                break;
-            case 0x1: // lh / sh
-                lsq.width = 2;
-                lsq.is_unsigned = false;
-                break;
-            case 0x2: // lw / sw
-                //fprintf(stderr, "load: lw\n");
-                lsq.width = 4;
-                lsq.is_unsigned = false;
-                break;
-            case 0x4: // lbu
-                lsq.width = 1;
-                lsq.is_unsigned = true;
-                break;
-            case 0x5: // lhu
-                lsq.width = 2;
-                lsq.is_unsigned = true;
-                break;
+            case 0x0: lsq.width = 1; lsq.is_unsigned = false; break;
+            case 0x1: lsq.width = 2; lsq.is_unsigned = false; break;
+            case 0x2: lsq.width = 4; lsq.is_unsigned = false; break;
+            case 0x4: lsq.width = 1; lsq.is_unsigned = true;  break;
+            case 0x5: lsq.width = 2; lsq.is_unsigned = true;  break;
         }
         lsq_tag = nxt.lsq.push(lsq);
     }
-    
+
+    PhysRegNum prs1 = cur.rat.map[ins.rs1];
+    PhysRegNum prs2 = cur.rat.map[ins.rs2];
+    PhysRegNum new_pnum = 0;
+    PhysRegNum old_pnum = 0;
+
+    if (writes_rf) {
+        new_pnum = nxt.free_list.pop();
+        //if (new_pnum == 44) fprintf(stderr, "the pc is %0x\n", cur.fetch.instruction_pc);
+        old_pnum = cur.rat.map[ins.rd];
+
+        nxt.rat.map[ins.rd] = new_pnum;
+        nxt.ready_table.ready[new_pnum] = false;
+
+        if (ins.opcode == 0x3) {
+            nxt.lsq.buf[lsq_tag].prs2_or_prd = new_pnum;
+        }
+    }
+
     auto rs_entry = RSEntry {
         .valid = true,
         .ins = ins,
         .rob_tag = cur.rob.last,
         .lsq_tag = lsq_tag,
+        .prs1 = prs1,
+        .prs2 = prs2,
+        .prd = new_pnum,
         .pc = cur.fetch.instruction_pc,
     };
-    if (
-        ins.opcode == 0x6F ||
-        ins.opcode == 0x17 ||
-        ins.opcode == 0x37 ||
-        ins.opcode == 0x73
-    ) {
-        rs_entry.ready1 = true;
-        rs_entry.value1 = 0;
-    } else if (cur.rat.map[ins.rs1] == NONE_ROB_TAG) {
-        rs_entry.ready1 = true;
-        rs_entry.value1 = cur.reg.reg[ins.rs1];
-    } else if (cur.rob.buf[cur.rat.map[ins.rs1]].ready) {
-        rs_entry.ready1 = true;
-        rs_entry.value1 = cur.rob.buf[cur.rat.map[ins.rs1]].result;
-    } else {
-        rs_entry.ready1 = false;
-        rs_entry.query1 = cur.rat.map[ins.rs1];
-    }
-    if (
-        ins.opcode == 0x13 || 
-        ins.opcode == 0x3 || 
-        ins.opcode == 0x67 && ins.func3 == 0x0 || 
-        ins.opcode == 0x6F ||
-        ins.opcode == 0x17 ||
-        ins.opcode == 0x37 ||
-        ins.opcode == 0x73
-    ) {
-        rs_entry.ready2 = true;
-        rs_entry.value2 = 0;
-    } else if (cur.rat.map[ins.rs2] == NONE_ROB_TAG) {
-        rs_entry.ready2 = true;
-        rs_entry.value2 = cur.reg.reg[ins.rs2];
-    } else if (cur.rob.buf[cur.rat.map[ins.rs2]].ready) {
-        rs_entry.ready2 = true;
-        rs_entry.value2 = cur.rob.buf[cur.rat.map[ins.rs2]].result;
-    } else {
-        rs_entry.ready2 = false;
-        rs_entry.query2 = cur.rat.map[ins.rs2];
-    }
-    if (!rs_entry.ready1) {
-        for (int j = 0; j < CDB_SIZE; j++) {
-            if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs_entry.query1) {
-                rs_entry.ready1 = true;
-                rs_entry.value1 = cur.cdb.buf[j].result;
-                break;
-            }
-        }
-    }
-    if (!rs_entry.ready2) {
-        for (int j = 0; j < CDB_SIZE; j++) {
-            if (cur.cdb.buf[j].valid && cur.cdb.buf[j].rob_tag == rs_entry.query2) {
-                rs_entry.ready2 = true;
-                rs_entry.value2 = cur.cdb.buf[j].result;
-                break;
-            }
-        }
-    }
     nxt.rs.push(rs_entry);
 
     if (ins.opcode == 0x6F) {
@@ -186,28 +160,14 @@ void issue(const CPUState &cur, CPUState &nxt) {
         nxt.fetch.pred_target = cur.fetch.instruction_pc + ins.imm;
     }
 
-    if (
-        ins.opcode != 0x23 &&
-        ins.opcode != 0x63 &&
-        ins.opcode != 0x73 &&
-        ins.rd != 0 //the x0 is always reset so can't be renamed!!!
-    ) {
-        nxt.rat.map[ins.rd] = cur.rob.last;
-    }
-
     nxt.rob.buf[cur.rob.last] = ROBEntry {
         .ready = false,
         .ins = ins,
-        .result = 0,
+        .arch_dest = ins.rd,
+        .new_pnum = new_pnum,
+        .old_pnum = old_pnum,
         .lsq_tag = lsq_tag,
-        .has_snapshot = false,
     };
-    if (ins.opcode == 0x63 || ins.opcode == 0x67) {
-        for (int r = 0; r < 32; r++) {
-            nxt.rob.buf[cur.rob.last].rat_map[r] = cur.rat.map[r];
-        }
-        nxt.rob.buf[cur.rob.last].has_snapshot = true;
-    }
+
     nxt.rob.last = (cur.rob.last + 1) % ROB_SIZE;
 }
-

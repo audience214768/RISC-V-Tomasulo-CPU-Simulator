@@ -21,3 +21,6 @@ constexpr u32 TERMINATE_INST = 0x0ff00513;
 
 constexpr int MEM_LATENCY = 3;
 
+constexpr int NUM_ARCH_REGS = 32;
+constexpr int NUM_PHYS_REGS = 128;
+
