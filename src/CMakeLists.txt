@@ -9,16 +9,4 @@ set_target_properties(code PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-# Unit test for instruction decode
-add_executable(test_decode
-    test_decode.cpp
-    module/issue.cpp)
 
-target_include_directories(test_decode PRIVATE
-    ${PROJECT_SOURCE_DIR}/include
-)
-
-
-add_executable(code_orig main_orig.cpp core/cpu_simulator.cpp module/fetch.cpp module/issue.cpp module/execute.cpp module/memory.cpp module/write_back.cpp module/commit.cpp)
-target_include_directories(code_orig PRIVATE ${PROJECT_SOURCE_DIR}/include)
-set_target_properties(code_orig PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
