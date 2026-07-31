@@ -102,4 +102,8 @@ private:
     size_t clock_           = 0;
     size_t branch_count_    = 0;
     size_t mispredict_count_ = 0;
+
+    // ---- branch predictor ----
+    uint8_t bht_[BHT_SIZE];           // 2-bit saturating counters: 0=SNT, 1=WNT, 2=WT, 3=ST
+    bool    bht_pred_[ROB_SIZE];      // per-ROB-slot prediction snapshot
 };

@@ -10,11 +10,12 @@ struct WBReadyWritePorts {
     Wire<1> set_req[NUM_PHYS_REGS];   
     void clear(){ wire_clear(set_req); } 
 };
-struct IssueReadyWritePorts { 
-    Wire<1> clear_req[NUM_PHYS_REGS]; 
-    void clear(){ wire_clear(clear_req); } 
+struct IssueReadyWritePorts {
+    Wire<1> clear_req[NUM_PHYS_REGS];
+    Wire<1> suppressed;
+    void clear(){ wire_clear(clear_req); suppressed.write(0); }
 };
-struct FlushReadyWritePorts { 
-    Wire<1> clear_req[NUM_PHYS_REGS]; 
-    void clear(){ wire_clear(clear_req); } 
+struct FlushReadyWritePorts {
+    Wire<1> clear_req[NUM_PHYS_REGS];
+    void clear(){ wire_clear(clear_req); }
 };

@@ -52,7 +52,7 @@ public:
             }
         }
 
-        // Push: Execute (up to 4) + Memory (1)
+        // Push: Execute (up to 4) + Memory (up to LSQ_SIZE)
         auto do_push = [&](u32 prd, u32 result, u32 rob_tag) {
             for (int i = 0; i < CDB_SIZE; i++) {
                 if (!entries_[i].valid.cur() && entries_[i].valid.next_raw() == 0) {
@@ -71,8 +71,10 @@ public:
                 do_push(exec.push_prd[j].read(), exec.push_result[j].read(), exec.push_rob_tag[j].read());
             }
         }
-        if (mem.push_valid.read()) {
-            do_push(mem.push_prd.read(), mem.push_result.read(), mem.push_rob_tag.read());
+        for (int j = 0; j < MemCDBWritePorts::kMaxPush; j++) {
+            if (mem.push_valid[j].read()) {
+                do_push(mem.push_prd[j].read(), mem.push_result[j].read(), mem.push_rob_tag[j].read());
+            }
         }
     }
 

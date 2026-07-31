@@ -14,6 +14,8 @@ TomasuloTop::TomasuloTop() {
     std::memset(mem_.buf, 0, sizeof(mem_.buf));
     prf_.reset(); ready_table_.reset(); rat_.reset(); free_list_.reset();
     cdb_.reset(); rs_.reset(); rob_.reset(); lsq_.reset();
+    std::memset(bht_, 1, sizeof(bht_));           // weak not-taken
+    std::memset(bht_pred_, 0, sizeof(bht_pred_));
     load_memory();
 }
 
@@ -126,6 +128,17 @@ static bool fetch_op_wire(const CDBReadPorts &cdb, const ReadyTableReadPorts &rt
 void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
     size_t fs = (branch_rob_tag + 1) % ROB_SIZE;
     size_t fe = rob_rp_.last.read();
+
+    // Suppress this cycle's issue outputs. Flush only gates issue/fetch signals;
+    // commit/memory/writeback signals (from pre-branch instructions) are unaffected.
+    issue_lsq_.suppressed.write(1);
+    issue_rs_.suppressed.write(1);
+    issue_fl_.suppressed.write(1);
+    issue_rat_.suppressed.write(1);
+    issue_ready_.suppressed.write(1);
+    flush_rob_.set_last_valid.write(1);
+    flush_rob_.set_last_val.write(static_cast<u32>(fs));
+
     if (fs == fe) {
         return ;
     }
@@ -152,8 +165,6 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
     }
     flush_rat_.restore_count.write(fc);
     flush_fl_.push_count.write(ffc);
-    flush_rob_.set_last_valid.write(1);
-    flush_rob_.set_last_val.write(static_cast<u32>(fs));
 
     auto in_range = [&](size_t tag) -> bool {
         //fprintf(stderr, "flush range fs = %d fe = %d tag = %d\n", fs, fe, tag);
@@ -236,6 +247,7 @@ void TomasuloTop::eval_writeback() {
 void TomasuloTop::eval_memory() {
     if (im_.exec_mispredict.read()) return;
 
+    int mp = 0;
     for (int i = 0; i < LSQ_SIZE; i++) {
         if (!lsq_rp_.valid[i].read()) continue;
         if (!lsq_rp_.addr_ready[i].read()) continue;
@@ -298,11 +310,12 @@ void TomasuloTop::eval_memory() {
             }
         }
 
-        if (lprd != 0) { 
-            mem_cdb_.push_valid.write(1); 
-            mem_cdb_.push_prd.write(lprd);
-            mem_cdb_.push_result.write(d); 
-            mem_cdb_.push_rob_tag.write(lrbt); 
+        if (lprd != 0) {
+            mem_cdb_.push_valid[mp].write(1);
+            mem_cdb_.push_prd[mp].write(lprd);
+            mem_cdb_.push_result[mp].write(d);
+            mem_cdb_.push_rob_tag[mp].write(lrbt);
+            mp++;
         }
         else {
             ready_rob_.set_ready_req[lrbt].write(1);
@@ -339,6 +352,17 @@ void TomasuloTop::eval_issue() {
         if (lsq_rp_.full.read()) fprintf(stderr, "lsq full\n");
         im_.issue_stall.write(1);
         return;
+    }
+
+    // BHT prediction for conditional branches
+    if (ins.opcode == 0x63) {
+        size_t bht_idx = (pc >> 2) % BHT_SIZE;
+        bool pred = (bht_[bht_idx] >= 2);
+        bht_pred_[rob_rp_.last.read()] = pred;
+        if (pred) {
+            im_.issue_pred_taken.write(1);
+            im_.issue_pred_target.write(pc + ins.imm);
+        }
     }
 
     // LSQ push
@@ -484,22 +508,27 @@ void TomasuloTop::eval_execute() {
               ready_rob_.set_ready_req[rbt].write(1);
               wcdb = false;
               break;
-            case 0x63: 
+            case 0x63: {
                 branch_count_++;
-                if (branch_cond(f3, rs1, rs2)) {
+                bool taken = branch_cond(f3, rs1, rs2);
+                size_t bht_idx = (pc >> 2) % BHT_SIZE;
+                bool pred = bht_pred_[rbt];
+
+                if (taken != pred) {
                     mispredict_count_++;
                     im_.exec_mispredict.write(1);
-                    //fprintf(stderr, "Branch predict faliure, new to %0x\n", pc + imm);
-                    im_.exec_correct_pc.write(pc + imm);
+                    im_.exec_correct_pc.write(taken ? pc + imm : pc + 4);
                     flush_pipeline(rbt);
-                    wcdb = false;
                     misp = true;
-                } else {
-                    //fprintf(stderr, "Branch predict success\n");
                 }
+                // update 2-bit saturating counter
+                if (taken) bht_[bht_idx] = (bht_[bht_idx] < 3) ? static_cast<uint8_t>(bht_[bht_idx] + 1) : static_cast<uint8_t>(3);
+                else       bht_[bht_idx] = (bht_[bht_idx] > 0) ? static_cast<uint8_t>(bht_[bht_idx] - 1) : static_cast<uint8_t>(0);
+
                 ready_rob_.set_ready_req[rbt].write(1);
                 wcdb = false;
                 break;
+            }
             case 0x6F:
                 res = pc + 4;
                 //fprintf(stderr, "[JAL]  pc=0x%x prd=%u res=0x%x\n", pc, prd, res);
@@ -543,7 +572,7 @@ void TomasuloTop::eval_execute() {
 }
 
 void TomasuloTop::eval_fetch() {
-    fprintf(stderr, "halt: %d stall %d mispredict %d pred_taken %d\n", im_.issue_halt.read(), im_.issue_stall.read(), im_.exec_mispredict.read(), im_.issue_pred_taken.read());
+    // fprintf(stderr, "halt: %d stall %d mispredict %d pred_taken %d\n", im_.issue_halt.read(), im_.issue_stall.read(), im_.exec_mispredict.read(), im_.issue_pred_taken.read());
     if (im_.issue_halt.read()) return;
     if (im_.issue_stall.read()) return;
 
@@ -566,13 +595,15 @@ void TomasuloTop::eval_fetch() {
 
 void TomasuloTop::tick() {
     // Clear all write Wires to 0 (Wires persist values across cycles)
-    wb_prf_.clear(); wb_ready_.clear(); issue_ready_.clear(); flush_ready_.clear();
-    issue_rat_.clear(); flush_rat_.clear();
-    issue_fl_.clear(); commit_fl_.clear(); flush_fl_.clear();
-    issue_rob_.clear(); commit_rob_.clear(); flush_rob_.clear(); ready_rob_.clear();
-    issue_rs_.clear(); exec_rs_.clear();
-    issue_lsq_.clear(); lsq_pnum_.clear(); exec_lsq_.clear(); mem_lsq_.clear(); commit_lsq_.clear();
-    exec_cdb_.clear(); mem_cdb_.clear(); wb_cdb_.clear();
+    wb_prf_.clear(); wb_ready_.clear(); 
+    issue_ready_.clear(); issue_rat_.clear(); issue_fl_.clear(); issue_rob_.clear(); 
+    issue_rs_.clear(); issue_lsq_.clear(); lsq_pnum_.clear(); 
+    flush_ready_.clear(); flush_rat_.clear(); flush_fl_.clear(); flush_rob_.clear(); 
+    commit_fl_.clear(); commit_rob_.clear(); commit_lsq_.clear();
+    ready_rob_.clear();
+    exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear(); 
+    mem_lsq_.clear(); mem_cdb_.clear(); 
+    wb_cdb_.clear();
     // Clear inter-module control Wires each cycle
     im_.issue_stall.write(0);
 
@@ -585,8 +616,8 @@ void TomasuloTop::tick() {
     //fprintf(stderr, "%d %0x\n", rat_rp_.map[5].read(), prf_rp_.data[rat_rp_.map[5].read()].read());
 
     // Step 1: processing modules eval (read wires → write per-writer wires)
-    eval_commit(); eval_writeback(); eval_memory();
-    eval_issue(); eval_execute(); eval_fetch();
+    eval_fetch();eval_commit(); eval_issue(); eval_memory();
+    eval_execute(); eval_writeback();
 
     // Step 2: storage modules eval (per-writer wires → internal Register.next)
     prf_.eval(wb_prf_);
@@ -619,7 +650,8 @@ void TomasuloTop::run() {
             break;
         }
         clock_++;
-        fprintf(stderr, "clock = %zu pc = %0x\n", clock_, im_.fetch_pc.read());
+        // fprintf(stderr, "clock = %zu pc = %0x\n", clock_, im_.fetch_pc.read());
+        //if (clock_ % 100000 == 0) fprintf(stderr, "clock = %zu pc = %0x\n", clock_, im_.fetch_pc.read());
         tick();
     }
     fprintf(stdout, "%d\n", ret);

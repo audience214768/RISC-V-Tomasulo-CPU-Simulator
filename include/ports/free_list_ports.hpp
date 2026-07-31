@@ -7,9 +7,10 @@ struct FreeListReadPorts {
     Wire<32> head_val; 
 };
 
-struct IssueFLWritePorts  { 
-    Wire<1> pop_req; 
-    void clear(){ pop_req.write(0); } 
+struct IssueFLWritePorts  {
+    Wire<1> pop_req;
+    Wire<1> suppressed;
+    void clear(){ pop_req.write(0); suppressed.write(0); }
 };
 struct CommitFLWritePorts { 
     Wire<32> push_pregs[NUM_PHYS_REGS]; 
@@ -19,11 +20,11 @@ struct CommitFLWritePorts {
         push_count.write(0);
     } 
 };
-struct FlushFLWritePorts  { 
-    Wire<32> push_pregs[NUM_PHYS_REGS]; 
+struct FlushFLWritePorts  {
+    Wire<32> push_pregs[NUM_PHYS_REGS];
     Wire<8> push_count;
     void clear(){
         wire_clear(push_pregs);
         push_count.write(0);
-    } 
+    }
 };

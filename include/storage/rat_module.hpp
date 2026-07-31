@@ -28,7 +28,7 @@ public:
             map_[rd].next_raw() = flush.restore_old[i].read();
             written[rd] = true;
         }
-        if (issue.rename_valid.read()) {
+        if (issue.rename_valid.read() && !issue.suppressed.read()) {
             ArchRegNum rd = static_cast<ArchRegNum>(issue.rename_rd.read());
             //fprintf(stderr, "old = %d new = %d\n", map_[rd].cur(), issue.rename_new.read());
             if (!written[rd]) {

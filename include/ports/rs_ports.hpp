@@ -12,17 +12,18 @@ struct RSReadPorts {
 };
 
 struct IssueRSWritePorts {
-    Wire<1> push_valid; 
-    Wire<7> push_opcode; 
-    Wire<3> push_ins_func3; 
+    Wire<1> push_valid;
+    Wire<7> push_opcode;
+    Wire<3> push_ins_func3;
     Wire<7> push_ins_func7;
     Wire<32> push_prs1, push_prs2, push_prd, push_pc, push_rob_tag, push_lsq_tag, push_ins_raw, push_ins_imm;
-    void clear(){ push_valid.write(0); }
+    Wire<1> suppressed;
+    void clear(){ push_valid.write(0); suppressed.write(0); }
 };
 struct ExecRSWritePorts {
     static constexpr int kMaxClear = 2;
-    Wire<8> clear_count; 
-    Wire<8> clear_idx[kMaxClear]; 
+    Wire<8> clear_count;
+    Wire<8> clear_idx[kMaxClear];
     Wire<1> flush_mask[RS_SIZE];
     void clear(){
         clear_count.write(0);

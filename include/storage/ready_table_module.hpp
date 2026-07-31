@@ -15,13 +15,15 @@ public:
     }
 
     void eval(const WBReadyWritePorts &wb, const IssueReadyWritePorts &issue, const FlushReadyWritePorts &flush) {
-        for (int i = 0; i < NUM_PHYS_REGS; i++) bits_[i].hold();
+        for (int i = 0; i < NUM_PHYS_REGS; i++) {
+            bits_[i].hold();
+        }
         // Priority: Flush > Issue > WriteBack (non-overlapping pregs)
         for (int i = 0; i < NUM_PHYS_REGS; i++) {
             if (flush.clear_req[i].read())      {
                 bits_[i].next_raw() = 0;
                 //if (i == 41) fprintf(stderr, "flush unable the 41\n");
-            } else if (issue.clear_req[i].read()) {
+            } else if (issue.clear_req[i].read() && !issue.suppressed.read()) {
                 bits_[i].next_raw() = 0;
                 //if (i == 41) fprintf(stderr, "issue unable the 41\n");
             } else if (wb.set_req[i].read()) {

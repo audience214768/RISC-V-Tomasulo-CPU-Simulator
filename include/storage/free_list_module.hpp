@@ -35,10 +35,10 @@ public:
             nxt_tail = (nxt_tail + 1) % NUM_PHYS_REGS; 
             nxt_count++;
         }
-        if (issue.pop_req.read()) {
-            if (nxt_count == 0) { 
-                fprintf(stderr, "FreeList: pop on empty!\n"); 
-                exit(1); 
+        if (issue.pop_req.read() && !issue.suppressed.read()) {
+            if (nxt_count == 0) {
+                fprintf(stderr, "FreeList: pop on empty!\n");
+                exit(1);
             }
             nxt_head = (nxt_head + 1) % NUM_PHYS_REGS; nxt_count--;
         }
@@ -52,13 +52,13 @@ public:
         // fprintf(stderr, "\n");
     }
 
-    void tick() { 
+    void tick() {
         for (int i = 0; i < NUM_PHYS_REGS; i++) {
-            buf_[i].tick(); 
-            head_.tick(); 
+            buf_[i].tick();
         }
-        tail_.tick(); 
-        count_.tick(); 
+        head_.tick();
+        tail_.tick();
+        count_.tick();
     }
     void reset() {
         for (int i = 0; i < NUM_PHYS_REGS; i++) {

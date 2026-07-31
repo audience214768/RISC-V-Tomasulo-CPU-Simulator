@@ -77,8 +77,8 @@ public:
             entries_[exec.clear_idx[i].read()].valid.next_raw() = 0;
         }
 
-        // Priority 3: Push (issue new entry)
-        if (issue.push_valid.read()) {
+        // Priority 3: Push (issue new entry, suppressed when flush is active)
+        if (issue.push_valid.read() && !issue.suppressed.read()) {
             int slot = -1;
             for (int i = 0; i < RS_SIZE; i++) {
                 if (!entries_[i].valid.cur() && entries_[i].valid.next_raw() == 0) { 

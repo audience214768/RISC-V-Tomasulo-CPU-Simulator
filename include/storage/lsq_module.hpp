@@ -69,9 +69,9 @@ public:
             }
         }
 
-        // P3: Issue push
+        // P3: Issue push (suppressed when flush is active)
         bool adv_last = false;
-        if (issue.push_valid.read()) {
+        if (issue.push_valid.read() && !issue.suppressed.read()) {
             size_t tag = last_.cur();
             entries_[tag].valid.next_raw() = 1;
             entries_[tag].is_load.next_raw() = issue.push_is_load.read();

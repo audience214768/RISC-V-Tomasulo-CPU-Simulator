@@ -20,8 +20,15 @@ struct ExecCDBWritePorts {
     }
 };
 struct MemCDBWritePorts {
-    Wire<1> push_valid; Wire<32> push_prd, push_result, push_rob_tag;
-    void clear(){ push_valid.write(0); }
+    static constexpr int kMaxPush = LSQ_SIZE;
+    Wire<1> push_valid[kMaxPush];
+    Wire<32> push_prd[kMaxPush], push_result[kMaxPush], push_rob_tag[kMaxPush];
+    void clear(){
+        wire_clear(push_valid);
+        wire_clear(push_prd);
+        wire_clear(push_result);
+        wire_clear(push_rob_tag);
+    }
 };
 struct WBCDBWritePorts {
     Wire<1> clear_req[CDB_SIZE];

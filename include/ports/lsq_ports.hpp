@@ -12,7 +12,8 @@ struct LSQReadPorts {
 struct IssueLSQWritePorts {
     Wire<1> push_valid, push_is_load, push_is_unsigned;
     Wire<32> push_rob_tag, push_prs2_or_prd; Wire<8> push_width;
-    void clear(){ push_valid.write(0); }
+    Wire<1> suppressed;
+    void clear(){ push_valid.write(0); suppressed.write(0); }
 };
 struct LSQPnumWritePorts {
      Wire<1> valid; 
