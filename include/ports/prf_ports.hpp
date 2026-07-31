@@ -7,7 +7,7 @@ struct PRFReadPorts {
 };
 
 struct WBPRFWritePorts {
-    static constexpr int kMaxWrites = 4;  // match CDB_SIZE potential entries per cycle
+    static constexpr int kMaxWrites = CDB_SIZE;
     Wire<1>  valid[kMaxWrites];
     Wire<32> preg[kMaxWrites];
     Wire<32> data[kMaxWrites];

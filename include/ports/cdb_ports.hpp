@@ -20,7 +20,7 @@ struct ExecCDBWritePorts {
     }
 };
 struct MemCDBWritePorts {
-    static constexpr int kMaxPush = LSQ_SIZE;
+    static constexpr int kMaxPush = 4;
     Wire<1> push_valid[kMaxPush];
     Wire<32> push_prd[kMaxPush], push_result[kMaxPush], push_rob_tag[kMaxPush];
     void clear(){

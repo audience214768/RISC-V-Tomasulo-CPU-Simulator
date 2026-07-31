@@ -34,27 +34,22 @@ public:
     RSModule() { reset(); }
 
     void drive_read_ports(RSReadPorts &p) {
+        bool any_free = false;
         for (int i = 0; i < RS_SIZE; i++) {
-            p.valid[i].write(entries_[i].valid.cur()); 
+            p.valid[i].write(entries_[i].valid.cur());
             p.opcode[i].write(entries_[i].ins_opcode.cur());
-            p.ins_func3[i].write(entries_[i].ins_func3.cur()); 
+            p.ins_func3[i].write(entries_[i].ins_func3.cur());
             p.ins_func7[i].write(entries_[i].ins_func7.cur());
-            p.prs1[i].write(entries_[i].prs1.cur()); 
+            p.prs1[i].write(entries_[i].prs1.cur());
             p.prs2[i].write(entries_[i].prs2.cur());
-            p.prd[i].write(entries_[i].prd.cur()); 
+            p.prd[i].write(entries_[i].prd.cur());
             p.pc[i].write(entries_[i].pc.cur());
-            p.rob_tag[i].write(entries_[i].rob_tag.cur()); 
+            p.rob_tag[i].write(entries_[i].rob_tag.cur());
             p.lsq_tag[i].write(entries_[i].lsq_tag.cur());
             p.ins_imm[i].write(entries_[i].ins_imm.cur());
+            if (!entries_[i].valid.cur()) any_free = true;
         }
-        bool f = true; 
-        for (int i = 0; i < RS_SIZE; i++) {
-            if (!entries_[i].valid.cur()) { 
-                f = false; 
-                break; 
-            }
-        }
-        p.full.write(f ? 1 : 0);
+        p.full.write(any_free ? 0 : 1);
     }
 
     void eval(const IssueRSWritePorts &issue, const ExecRSWritePorts &exec) {

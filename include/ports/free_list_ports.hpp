@@ -12,16 +12,18 @@ struct IssueFLWritePorts  {
     Wire<1> suppressed;
     void clear(){ pop_req.write(0); suppressed.write(0); }
 };
-struct CommitFLWritePorts { 
-    Wire<32> push_pregs[NUM_PHYS_REGS]; 
+struct CommitFLWritePorts {
+    static constexpr int kMaxPush = 16;
+    Wire<32> push_pregs[kMaxPush];
     Wire<8> push_count;
-    void clear(){ 
+    void clear(){
         wire_clear(push_pregs);
         push_count.write(0);
-    } 
+    }
 };
 struct FlushFLWritePorts  {
-    Wire<32> push_pregs[NUM_PHYS_REGS];
+    static constexpr int kMaxPush = ROB_SIZE;
+    Wire<32> push_pregs[kMaxPush];
     Wire<8> push_count;
     void clear(){
         wire_clear(push_pregs);
