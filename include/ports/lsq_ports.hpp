@@ -11,9 +11,13 @@ struct LSQReadPorts {
 
 struct IssueLSQWritePorts {
     Wire<1> push_valid, push_is_load, push_is_unsigned;
-    Wire<32> push_rob_tag, push_prs2_or_prd; Wire<8> push_width;
+    Wire<32> push_rob_tag, push_prs2_or_prd; 
+    Wire<8> push_width;
     Wire<1> suppressed;
-    void clear(){ push_valid.write(0); suppressed.write(0); }
+    void clear(){ 
+        push_valid.write(0); 
+        suppressed.write(0); 
+    }
 };
 struct LSQPnumWritePorts {
      Wire<1> valid; 
@@ -22,8 +26,10 @@ struct LSQPnumWritePorts {
      void clear(){ valid.write(0); } 
 };
 struct ExecLSQWritePorts {
-    Wire<1> set_addr_ready_req[LSQ_SIZE]; Wire<32> set_addr_val[LSQ_SIZE];
-    Wire<1> set_store_data_req[LSQ_SIZE]; Wire<32> set_store_data_val[LSQ_SIZE];
+    Wire<1> set_addr_ready_req[LSQ_SIZE]; 
+    Wire<32> set_addr_val[LSQ_SIZE];
+    Wire<1> set_store_data_req[LSQ_SIZE]; 
+    Wire<32> set_store_data_val[LSQ_SIZE];
     Wire<1> flush_mask[LSQ_SIZE];
     void clear(){
         wire_clear(set_addr_ready_req);
@@ -32,8 +38,10 @@ struct ExecLSQWritePorts {
     }
 };
 struct MemLSQWritePorts {
-    Wire<1> set_mem_wait_req[LSQ_SIZE]; Wire<32> set_mem_wait_val[LSQ_SIZE];
-    Wire<1> set_load_data_req[LSQ_SIZE]; Wire<32> set_load_data_val[LSQ_SIZE];
+    Wire<1> set_mem_wait_req[LSQ_SIZE]; 
+    Wire<32> set_mem_wait_val[LSQ_SIZE];
+    Wire<1> set_load_data_req[LSQ_SIZE]; 
+    Wire<32> set_load_data_val[LSQ_SIZE];
     Wire<1> invalidate_req[LSQ_SIZE];
     void clear(){
         wire_clear(set_mem_wait_req);
@@ -42,7 +50,9 @@ struct MemLSQWritePorts {
     }
 };
 struct CommitLSQWritePorts {
-    Wire<1> invalidate_req[LSQ_SIZE]; Wire<1> set_head_valid; Wire<32> set_head_val;
+    Wire<1> invalidate_req[LSQ_SIZE]; 
+    Wire<1> set_head_valid; 
+    Wire<32> set_head_val;
     void clear(){
         wire_clear(invalidate_req);
         set_head_valid.write(0);

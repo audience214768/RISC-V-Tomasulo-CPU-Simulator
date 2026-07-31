@@ -12,6 +12,8 @@ struct WBPRFWritePorts {
     Wire<32> preg[kMaxWrites];
     Wire<32> data[kMaxWrites];
     void clear() {
-        wire_clear(valid); wire_clear(preg); wire_clear(data);
+        wire_clear(valid); 
+        wire_clear(preg); 
+        wire_clear(data);
     }
 };

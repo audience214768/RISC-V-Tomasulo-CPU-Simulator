@@ -2,7 +2,6 @@
 #include "rtl/register.hpp"
 #include "ports/free_list_ports.hpp"
 #include "utils/config.hpp"
-#include "utils/types.hpp"
 #include <cstdio>
 #include <cstdlib>
 

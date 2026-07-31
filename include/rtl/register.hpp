@@ -4,9 +4,6 @@
 #include <cstdint>
 #include <type_traits>
 
-// ---------------------------------------------------------------------------
-// internal: pick smallest unsigned integer that holds Width bits
-// ---------------------------------------------------------------------------
 namespace rtl_detail {
 
 template <size_t Width>
@@ -54,17 +51,13 @@ public:
         : cur_(static_cast<storage_t>(init & kMask))
         , next_(static_cast<storage_t>(init & kMask)) {}
 
-    // ---- Q output (read-only) ----------------------------------------
     auto cur() const -> storage_t { return cur_; }
 
-    // ---- default hold (next ← cur, for eval()) -----------------------
     void hold() { next_ = cur_; }
 
-    // ---- full-width read / write -------------------------------------
     auto read() const -> storage_t { return cur_; }
     void write(storage_t val) { next_ = static_cast<storage_t>(val & kMask); }
 
-    // ---- sub-width write with extension (load semantics) -------------
     /// Zero-extend SubW-bit `val` to Width bits and write to next
     template <size_t SubW>
     void write_zx(uint64_t val) {
@@ -83,7 +76,6 @@ public:
         next_ = static_cast<storage_t>(v & kMask);
     }
 
-    // ---- sub-width read (store semantics) ----------------------------
     /// Return the lower SubW bits, no extension
     template <size_t SubW>
     auto read_sub() const -> storage_t {

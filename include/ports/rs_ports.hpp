@@ -18,7 +18,10 @@ struct IssueRSWritePorts {
     Wire<7> push_ins_func7;
     Wire<32> push_prs1, push_prs2, push_prd, push_pc, push_rob_tag, push_lsq_tag, push_ins_raw, push_ins_imm;
     Wire<1> suppressed;
-    void clear(){ push_valid.write(0); suppressed.write(0); }
+    void clear(){ 
+        push_valid.write(0); 
+        suppressed.write(0); 
+    }
 };
 struct ExecRSWritePorts {
     static constexpr int kMaxClear = 2;

@@ -21,11 +21,15 @@ public:
         else return static_cast<storage_t>(value_ & rtl_detail::sub_mask<SubW>());
     }
     auto read_sub(size_t sw) const -> storage_t {
-        switch(sw){case 8:return read_sub<8>();case 16:return read_sub<16>();case 32:return read_sub<32>();default:return read();}
+        switch(sw){
+            case 8: return read_sub<8>();
+            case 16: return read_sub<16>();
+            case 32: return read_sub<32>();
+            default: return read();
+        }
     }
 };
 
-/// Helper: zero an array of Wires
 template <typename T, size_t N>
 static inline void wire_clear(T (&arr)[N]) {
     std::memset(arr, 0, sizeof(arr));
