@@ -1,6 +1,6 @@
-#include "core/cpu_simulator.hpp"
+#include "core/cpu_top.hpp"
 
 int main() {
-    CPUSimulator cpu_simulator;
-    cpu_simulator.run();
+    TomasuloTop cpu;
+    cpu.run();
 }
