@@ -13,17 +13,7 @@ public:
             p.data[i].write(values_[i].cur()); 
         }
     }
-    void eval(const WBPRFWritePorts &wb) {
-        for(int i = 0; i < NUM_PHYS_REGS; i++) {
-            values_[i].hold();
-        }
-        for(int j = 0; j < WBPRFWritePorts::kMaxWrites; j++) {
-            if(wb.valid[j].read()) {
-                //if (wb.preg[j].read() == 123) fprintf(stderr, "write to 123\n");
-                values_[wb.preg[j].read()].next_raw() = wb.data[j].read();
-            }
-        }
-    }
+    void eval(const WBPRFWritePorts &wb);
     void force(PhysRegNum p, u32 v) { values_[p].next_raw() = v; }
     void tick() { 
         for(int i = 0; i < NUM_PHYS_REGS; i++) {
