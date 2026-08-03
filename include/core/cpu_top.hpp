@@ -8,6 +8,8 @@
 #include "storage/rs_module.hpp"
 #include "storage/rob_module.hpp"
 #include "storage/lsq_module.hpp"
+#include "storage/fetch_module.hpp"
+#include "storage/bht_module.hpp"
 
 #include "ports/prf_ports.hpp"
 #include "ports/ready_table_ports.hpp"
@@ -17,7 +19,8 @@
 #include "ports/rs_ports.hpp"
 #include "ports/rob_ports.hpp"
 #include "ports/lsq_ports.hpp"
-#include "ports/inter_module_ports.hpp"
+#include "ports/fetch_ports.hpp"
+#include "ports/bht_ports.hpp"
 
 #include "utils/config.hpp"
 #include "utils/types.hpp"
@@ -37,7 +40,6 @@ private:
     void eval_memory();
     void eval_issue();
     void eval_execute();
-    void eval_fetch();
 
     static auto decode(u32 raw) -> Instruction;
     static auto sign_extend(u32 val, u8 bits) -> u32;
@@ -56,6 +58,8 @@ private:
     RSModule         rs_;
     ROBModule        rob_;
     LSQModule        lsq_;
+    FetchModule      fetch_;
+    BHTModule        bht_;
 
     // ---- read port wires ----
     PRFReadPorts        prf_rp_;
@@ -66,6 +70,8 @@ private:
     RSReadPorts         rs_rp_;
     ROBReadPorts        rob_rp_;
     LSQReadPorts        lsq_rp_;
+    FetchReadPorts      fetch_rp_;
+    BHTReadPorts        bht_rp_;
 
     // ---- write port wires (per-writer bundles) ----
     WBPRFWritePorts       wb_prf_;
@@ -92,8 +98,11 @@ private:
     MemCDBWritePorts      mem_cdb_;
     WBCDBWritePorts       wb_cdb_;
 
-    // ---- inter-module wires ----
-    InterModulePorts im_;
+    // ---- Fetch write ports ----
+    HaltRequestWritePorts  halt_req_;
+    ExecToFetchWritePorts  exec_to_fetch_;
+    IssueToFetchWritePorts issue_to_fetch_;
+    ExecBHTWritePorts     bht_exec_;
 
     // ---- external memory ----
     MemState mem_;
@@ -104,6 +113,5 @@ private:
     size_t mispredict_count_ = 0;
 
     // ---- branch predictor ----
-    uint8_t bht_[BHT_SIZE];           // 2-bit saturating counters: 0=SNT, 1=WNT, 2=WT, 3=ST
     bool    bht_pred_[ROB_SIZE];      // per-ROB-slot prediction snapshot
 };

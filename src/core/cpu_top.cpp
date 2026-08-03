@@ -14,7 +14,7 @@ TomasuloTop::TomasuloTop() {
     std::memset(mem_.buf, 0, sizeof(mem_.buf));
     prf_.reset(); ready_table_.reset(); rat_.reset(); free_list_.reset();
     cdb_.reset(); rs_.reset(); rob_.reset(); lsq_.reset();
-    std::memset(bht_, 1, sizeof(bht_));           // weak not-taken
+    fetch_.reset(); bht_.reset();
     std::memset(bht_pred_, 0, sizeof(bht_pred_));
     load_memory();
 }
@@ -188,18 +188,18 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
 
 void TomasuloTop::eval_commit() {
     u32 head = rob_rp_.head.read(), last = rob_rp_.last.read();
-    u32 lsq_hd = lsq_rp_.head.read(), lsq_lt = lsq_rp_.last.read();
-    u8 flc = 0;
 
-    while (head != last && rob_rp_.ready[head].read()) {
+    // single commit per cycle (COMMIT_WIDTH = 1)
+    u8 flc = 0;
+    if (head != last && rob_rp_.ready[head].read()) {
         u32 opcode = rob_rp_.opcode[head].read(), rd = rob_rp_.rd[head].read();
         u32 np = rob_rp_.new_pnum[head].read(), op = rob_rp_.old_pnum[head].read();
         u32 lt = rob_rp_.lsq_tag[head].read();
-        //fprintf(stderr, "Commit %d %d\n", np, );
+
         if (rd != 0 && (opcode == 0x33 || opcode == 0x13 || opcode == 0x03 || opcode == 0x6F || opcode == 0x67 || opcode == 0x17 || opcode == 0x37)) {
-            if (np != 0) { 
-                commit_fl_.push_pregs[flc].write(op); 
-                flc++; 
+            if (np != 0) {
+                commit_fl_.push_pregs[0].write(op);
+                flc = 1;
             }
         }
 
@@ -214,13 +214,14 @@ void TomasuloTop::eval_commit() {
         head = (head + 1) % ROB_SIZE;
     }
     commit_fl_.push_count.write(flc);
-    commit_rob_.set_head_valid.write(1); 
+    commit_rob_.set_head_valid.write(1);
     commit_rob_.set_head_val.write(head);
 
+    u32 lsq_hd = lsq_rp_.head.read(), lsq_lt = lsq_rp_.last.read();
     while (lsq_hd != lsq_lt && !lsq_rp_.valid[lsq_hd].read()) {
         lsq_hd = (lsq_hd + 1) % LSQ_SIZE;
     }
-    commit_lsq_.set_head_valid.write(1); 
+    commit_lsq_.set_head_valid.write(1);
     commit_lsq_.set_head_val.write(lsq_hd);
 }
 
@@ -245,8 +246,6 @@ void TomasuloTop::eval_writeback() {
 }
 
 void TomasuloTop::eval_memory() {
-    if (im_.exec_mispredict.read()) return;
-
     int mp = 0;
     for (int i = 0; i < LSQ_SIZE; i++) {
         if (!lsq_rp_.valid[i].read()) continue;
@@ -327,18 +326,17 @@ void TomasuloTop::eval_memory() {
 
 void TomasuloTop::eval_issue() {
 
-    if (im_.issue_halt.read()) return;
-    if (im_.exec_mispredict.read()) return;
-    if (im_.issue_pred_taken.read()) return;
-    u32 raw = im_.fetch_raw_instruction.read();
+    if (fetch_rp_.halt.read()) return;
+    if (!fetch_rp_.f2i_valid.read()) return;
+    u32 raw = fetch_rp_.f2i_raw.read();
     if (raw == 0) return;
 
     //fprintf(stderr, "check\n");
 
     auto ins = decode(raw);
-    u32 pc = im_.fetch_instruction_pc.read();
+    u32 pc = fetch_rp_.f2i_pc.read();
     if (raw == TERMINATE_INST) {
-        im_.issue_halt.write(1);
+        halt_req_.req.write(1);
         return;
     }
 
@@ -350,18 +348,18 @@ void TomasuloTop::eval_issue() {
         if (rs_rp_.full.read()) fprintf(stderr, "rs is full\n");
         if (fl_rp_.empty.read()) fprintf(stderr, "freelist full\n");
         if (lsq_rp_.full.read()) fprintf(stderr, "lsq full\n");
-        im_.issue_stall.write(1);
+        issue_to_fetch_.stall.write(1);
         return;
     }
 
     // BHT prediction for conditional branches
     if (ins.opcode == 0x63) {
         size_t bht_idx = (pc >> 2) % BHT_SIZE;
-        bool pred = (bht_[bht_idx] >= 2);
+        bool pred = (bht_rp_.counters[bht_idx].read() >= 2);
         bht_pred_[rob_rp_.last.read()] = pred;
         if (pred) {
-            im_.issue_pred_taken.write(1);
-            im_.issue_pred_target.write(pc + ins.imm);
+            issue_to_fetch_.pred_taken.write(1);
+            issue_to_fetch_.pred_target.write(pc + ins.imm);
         }
     }
 
@@ -412,7 +410,7 @@ void TomasuloTop::eval_issue() {
     // JAL prediction
     if (ins.opcode == 0x6F) {
         //fprintf(stderr, "[ISS JAL] pc=0x%x rd=%d np=%u op=%u tgt=0x%x\n", pc, ins.rd, np, op, pc + ins.imm);
-        im_.issue_pred_taken.write(1); im_.issue_pred_target.write(pc + ins.imm);
+        issue_to_fetch_.pred_taken.write(1); issue_to_fetch_.pred_target.write(pc + ins.imm);
     }
 
     // ROB push
@@ -422,204 +420,166 @@ void TomasuloTop::eval_issue() {
 }
 
 void TomasuloTop::eval_execute() {
-    bool proc[RS_SIZE] = {false}; 
-    bool misp = false; 
-    int alu = 0;
+    int  best_i   = -1;
+    u32  best_age = static_cast<u32>(SIZE_MAX);
+    u32  jt_tag   = NONE_ROB_TAG;
+    u32  jt_age   = static_cast<u32>(SIZE_MAX);
 
-    while (alu < 2) {
-        int oi = -1; 
-        size_t od = SIZE_MAX, jt = NONE_ROB_TAG, jd = SIZE_MAX;
-        //fprintf(stderr, "traverse\n");
-        for (int i = 0; i < RS_SIZE; i++) {
-            if (proc[i]) continue;
-            if (!rs_rp_.valid[i].read()) {
-                proc[i] = true;
-                continue;
+    // ---- single pass: find oldest ready instruction + oldest unready JALR ----
+    for (int i = 0; i < RS_SIZE; i++) {
+        if (!rs_rp_.valid[i].read()) continue;
+
+        u32 age = (rs_rp_.rob_tag[i].read() - rob_rp_.head.read() + ROB_SIZE) % ROB_SIZE;
+        u32 tmp;
+        bool r1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
+        bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
+
+        // track oldest unready JALR
+        if (!r1 || !r2) {
+            if (rs_rp_.opcode[i].read() == 0x67 && age < jt_age) {
+                jt_tag = rs_rp_.rob_tag[i].read();
+                jt_age = age;
             }
-            u32 dist = (rs_rp_.rob_tag[i].read() - rob_rp_.head.read() + ROB_SIZE) % ROB_SIZE; 
-            u32 tmp;
-            bool ready1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
-            bool ready2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
-            if (!ready1 || !ready2) {
-                if (rs_rp_.opcode[i].read() == 0x67 && dist < jd) {
-                    jt = rs_rp_.rob_tag[i].read();
-                    jd = dist;
-                } 
-                //fprintf(stderr, "%0x %d %d\n", rs_rp_.pc[i].read(), ready1, ready2);
-                continue;
-            }
-            if (jt != NONE_ROB_TAG) {
-                u32 st = (jt + 1) % ROB_SIZE, ed = rob_rp_.last.read();
-                bool nw = (st < ed) ? (rs_rp_.rob_tag[i].read() >= st && rs_rp_.rob_tag[i].read() < ed)
-                                : (rs_rp_.rob_tag[i].read() >= st || rs_rp_.rob_tag[i].read() < ed);
-                if (nw) continue;
-            }
-            if (dist < od) {
-                oi = i;
-                od = dist;
-            }
+            continue;
         }
-        //fprintf(stderr, "\n");
-        if (oi == -1) break;
-        proc[oi] = true;
 
-        u32 rs1 = 0, rs2 = 0, opcode = rs_rp_.opcode[oi].read(), f3 = rs_rp_.ins_func3[oi].read(),
-            f7 = rs_rp_.ins_func7[oi].read(), pc = rs_rp_.pc[oi].read(), prd = rs_rp_.prd[oi].read(),
-            rbt = rs_rp_.rob_tag[oi].read(), lst = rs_rp_.lsq_tag[oi].read(), imm = rs_rp_.ins_imm[oi].read();
-        fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[oi].read(), rs1);
-        fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[oi].read(), rs2);
+        // JALR blocking: if there's an older unready JALR, skip younger instructions
+        if (jt_tag != NONE_ROB_TAG && jt_age < age) continue;
 
-        u32 res = 0; 
-        bool wcdb = true;
-        switch (opcode) {
-            case 0x33: 
-                res = ALU_R(f3, f7, rs1, rs2);
-                break;
-            case 0x13:
-                res = ALU_I(f3, f7, rs1, imm);
-                break;
-            case 0x37:
-                res = imm;
-                break;
-            case 0x17:
-                res = pc + imm;
-                break;
-            case 0x03:
-                res = rs1 + imm;
-                exec_lsq_.set_addr_ready_req[lst].write(1);
-                exec_lsq_.set_addr_val[lst].write(res);
-                wcdb = false;
-                break;
-            case 0x23:
-                res = rs1 + imm;
-                exec_lsq_.set_addr_ready_req[lst].write(1);
-                exec_lsq_.set_addr_val[lst].write(res);
-                exec_lsq_.set_store_data_req[lst].write(1);
-                exec_lsq_.set_store_data_val[lst].write([&]() {
-                switch (f3) {
-                    case 0x0:
-                        return rs2 & 0xFF;
-                    case 0x1:
-                        return rs2 & 0xFFFF;
-                    default:
-                       return rs2;
-                }
-              }());
-              ready_rob_.set_ready_req[rbt].write(1);
-              wcdb = false;
-              break;
-            case 0x63: {
-                branch_count_++;
-                bool taken = branch_cond(f3, rs1, rs2);
-                size_t bht_idx = (pc >> 2) % BHT_SIZE;
-                bool pred = bht_pred_[rbt];
+        // oldest-first selection
+        if (age < best_age) {
+            best_i   = i;
+            best_age = age;
+        }
+    }
 
-                if (taken != pred) {
-                    mispredict_count_++;
-                    im_.exec_mispredict.write(1);
-                    im_.exec_correct_pc.write(taken ? pc + imm : pc + 4);
-                    flush_pipeline(rbt);
-                    misp = true;
-                }
-                // update 2-bit saturating counter
-                if (taken) bht_[bht_idx] = (bht_[bht_idx] < 3) ? static_cast<uint8_t>(bht_[bht_idx] + 1) : static_cast<uint8_t>(3);
-                else       bht_[bht_idx] = (bht_[bht_idx] > 0) ? static_cast<uint8_t>(bht_[bht_idx] - 1) : static_cast<uint8_t>(0);
+    if (best_i == -1) return;
 
-                ready_rob_.set_ready_req[rbt].write(1);
-                wcdb = false;
-                break;
+    // ---- execute the selected instruction ----
+    u32 rs1 = 0, rs2 = 0, opcode = rs_rp_.opcode[best_i].read(), f3 = rs_rp_.ins_func3[best_i].read(),
+        f7 = rs_rp_.ins_func7[best_i].read(), pc = rs_rp_.pc[best_i].read(), prd = rs_rp_.prd[best_i].read(),
+        rbt = rs_rp_.rob_tag[best_i].read(), lst = rs_rp_.lsq_tag[best_i].read(), imm = rs_rp_.ins_imm[best_i].read();
+    fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[best_i].read(), rs1);
+    fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[best_i].read(), rs2);
+
+    u32 res = 0;
+    bool wcdb = true;
+    switch (opcode) {
+        case 0x33:
+            res = ALU_R(f3, f7, rs1, rs2);
+            break;
+        case 0x13:
+            res = ALU_I(f3, f7, rs1, imm);
+            break;
+        case 0x37:
+            res = imm;
+            break;
+        case 0x17:
+            res = pc + imm;
+            break;
+        case 0x03:
+            res = rs1 + imm;
+            exec_lsq_.set_addr_ready_req[lst].write(1);
+            exec_lsq_.set_addr_val[lst].write(res);
+            wcdb = false;
+            break;
+        case 0x23:
+            res = rs1 + imm;
+            exec_lsq_.set_addr_ready_req[lst].write(1);
+            exec_lsq_.set_addr_val[lst].write(res);
+            exec_lsq_.set_store_data_req[lst].write(1);
+            exec_lsq_.set_store_data_val[lst].write([&]() {
+            switch (f3) {
+                case 0x0:
+                    return rs2 & 0xFF;
+                case 0x1:
+                    return rs2 & 0xFFFF;
+                default:
+                   return rs2;
             }
-            case 0x6F:
-                res = pc + 4;
-                //fprintf(stderr, "[JAL]  pc=0x%x prd=%u res=0x%x\n", pc, prd, res);
-                break;
-            case 0x67: {
-                u32 t = (rs1 + imm) & ~1u;
-                res = pc + 4;
-                u32 pr1 = rs_rp_.prs1[oi].read();
-                //fprintf(stderr, "[JALR] pc=0x%x prs1=%u rs1=0x%x rdy=%d imm=0x%x target=0x%x CDB:", pc, pr1, rs1, rt_rp_.ready[pr1].read(), imm, t);
-                im_.exec_mispredict.write(1);
-                im_.exec_correct_pc.write(t);
+          }());
+          ready_rob_.set_ready_req[rbt].write(1);
+          wcdb = false;
+          break;
+        case 0x63: {
+            branch_count_++;
+            bool taken = branch_cond(f3, rs1, rs2);
+            size_t bht_idx = (pc >> 2) % BHT_SIZE;
+            bool pred = bht_pred_[rbt];
+
+            if (taken != pred) {
+                mispredict_count_++;
+                exec_to_fetch_.mispredict.write(1);
+                exec_to_fetch_.correct_pc.write(taken ? pc + imm : pc + 4);
                 flush_pipeline(rbt);
-                misp = true;
-                break;
             }
-            case 0x0F:
-                res = 0;
-                wcdb = false;
-                break;
-            default: 
-                fprintf(stderr, "unknown op:0x%x pc=0x%x\n", opcode, pc);
-                exit(1);
-        }
-        if (wcdb) {
-            int p = 0;
-            while (exec_cdb_.push_valid[p].read()) {
-                p++;
-            }
-            exec_cdb_.push_valid[p].write(1);
-            exec_cdb_.push_prd[p].write(prd);
-            exec_cdb_.push_result[p].write(res);
-            exec_cdb_.push_rob_tag[p].write(rbt);
-        }
-        exec_rs_.clear_idx[alu].write(static_cast<u8>(oi));
-        exec_rs_.clear_count.write(static_cast<u8>(alu + 1));
-        alu++; 
-        if (misp) {
+            // update 2-bit saturating counter (via BHT module write ports)
+            bht_exec_.update_req.write(1);
+            bht_exec_.update_idx.write(static_cast<u32>(bht_idx));
+            bht_exec_.update_taken.write(taken ? 1 : 0);
+
+            ready_rob_.set_ready_req[rbt].write(1);
+            wcdb = false;
             break;
         }
+        case 0x6F:
+            res = pc + 4;
+            break;
+        case 0x67: {
+            u32 t = (rs1 + imm) & ~1u;
+            res = pc + 4;
+            exec_to_fetch_.mispredict.write(1);
+            exec_to_fetch_.correct_pc.write(t);
+            flush_pipeline(rbt);
+            break;
+        }
+        case 0x0F:
+            res = 0;
+            wcdb = false;
+            break;
+        default:
+            fprintf(stderr, "unknown op:0x%x pc=0x%x\n", opcode, pc);
+            exit(1);
     }
+    if (wcdb) {
+        exec_cdb_.push_valid[0].write(1);
+        exec_cdb_.push_prd[0].write(prd);
+        exec_cdb_.push_result[0].write(res);
+        exec_cdb_.push_rob_tag[0].write(rbt);
+    }
+    exec_rs_.clear_idx[0].write(static_cast<u8>(best_i));
+    exec_rs_.clear_count.write(static_cast<u8>(1));
 }
 
-void TomasuloTop::eval_fetch() {
-    // fprintf(stderr, "halt: %d stall %d mispredict %d pred_taken %d\n", im_.issue_halt.read(), im_.issue_stall.read(), im_.exec_mispredict.read(), im_.issue_pred_taken.read());
-    if (im_.issue_halt.read()) return;
-    if (im_.issue_stall.read()) return;
-
-    u32 pc = im_.fetch_pc.read(), addr;
-    if (im_.exec_mispredict.read()) {
-      addr = im_.exec_correct_pc.read();
-    } else if (im_.issue_pred_taken.read()) {
-      addr = im_.issue_pred_target.read();
-    } else {
-      addr = pc;
-    }
-    u32 raw = std::bit_cast<u32>(std::array<u8, 4>{mem_.buf[addr], mem_.buf[addr + 1], mem_.buf[addr + 2], mem_.buf[addr + 3]});
-    im_.fetch_instruction_pc.write(addr);
-    im_.fetch_raw_instruction.write(raw);
-    //fprintf(stderr, "new pc = %0x\n", addr + 4);
-    im_.fetch_pc.write(addr + 4);
-    im_.exec_mispredict.write(0);
-    im_.issue_pred_taken.write(0);
-}
 
 void TomasuloTop::tick() {
-    // Clear all write Wires to 0 (Wires persist values across cycles)
-    wb_prf_.clear(); wb_ready_.clear(); 
-    issue_ready_.clear(); issue_rat_.clear(); issue_fl_.clear(); issue_rob_.clear(); 
-    issue_rs_.clear(); issue_lsq_.clear(); lsq_pnum_.clear(); 
-    flush_ready_.clear(); flush_rat_.clear(); flush_fl_.clear(); flush_rob_.clear(); 
+    // ---- Clear all write-port Wires (pulse semantics, one cycle only) ----
+    wb_prf_.clear(); wb_ready_.clear();
+    issue_ready_.clear(); issue_rat_.clear(); issue_fl_.clear(); issue_rob_.clear();
+    issue_rs_.clear(); issue_lsq_.clear(); lsq_pnum_.clear();
+    flush_ready_.clear(); flush_rat_.clear(); flush_fl_.clear(); flush_rob_.clear();
     commit_fl_.clear(); commit_rob_.clear(); commit_lsq_.clear();
     ready_rob_.clear();
-    exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear(); 
-    mem_lsq_.clear(); mem_cdb_.clear(); 
+    exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();
+    mem_lsq_.clear(); mem_cdb_.clear();
     wb_cdb_.clear();
-    // Clear inter-module control Wires each cycle
-    im_.issue_stall.write(0);
+    halt_req_.clear();
+    exec_to_fetch_.clear();
+    issue_to_fetch_.clear();
+    bht_exec_.clear();
 
-    // Step 0: storage modules drive read port wires
+    // ---- Step 0: all storage modules drive read-port wires ----
     prf_.drive_read_ports(prf_rp_); ready_table_.drive_read_ports(rt_rp_);
     rat_.drive_read_ports(rat_rp_); free_list_.drive_read_ports(fl_rp_);
     cdb_.drive_read_ports(cdb_rp_); rs_.drive_read_ports(rs_rp_);
     rob_.drive_read_ports(rob_rp_); lsq_.drive_read_ports(lsq_rp_);
+    fetch_.drive_read_ports(fetch_rp_); bht_.drive_read_ports(bht_rp_);
 
-    //fprintf(stderr, "%d %0x\n", rat_rp_.map[5].read(), prf_rp_.data[rat_rp_.map[5].read()].read());
+    // ---- Step 1: processing evals (read ports → write-port wires), ANY ORDER ----
+    eval_commit(); eval_writeback(); eval_memory();
+    eval_issue(); eval_execute();
 
-    // Step 1: processing modules eval (read wires → write per-writer wires)
-    eval_fetch();eval_commit(); eval_issue(); eval_memory();
-    eval_execute(); eval_writeback();
-
-    // Step 2: storage modules eval (per-writer wires → internal Register.next)
+    // ---- Step 2: all storage modules eval (write-port wires → Register.next) ----
     prf_.eval(wb_prf_);
     ready_table_.eval(wb_ready_, issue_ready_, flush_ready_);
     rat_.eval(issue_rat_, flush_rat_);
@@ -628,30 +588,27 @@ void TomasuloTop::tick() {
     rs_.eval(issue_rs_, exec_rs_);
     lsq_.eval(issue_lsq_, lsq_pnum_, exec_lsq_, mem_lsq_, commit_lsq_);
     cdb_.eval(exec_cdb_, mem_cdb_, wb_cdb_);
+    fetch_.eval(halt_req_, exec_to_fetch_, issue_to_fetch_, mem_);
+    bht_.eval(bht_exec_);
 
-    // x0 force
+    // ---- x0 force ----
     prf_.force(0, 0); ready_table_.force(0, true);
 
-    // Step 3: tick all
+    // ---- Step 3: tick all ----
     prf_.tick(); ready_table_.tick(); rat_.tick(); free_list_.tick();
     cdb_.tick(); rs_.tick(); rob_.tick(); lsq_.tick();
-
+    fetch_.tick(); bht_.tick();
 }
 
 void TomasuloTop::run() {
     int ret = 0;
-    im_.fetch_pc.write(0);
-    im_.exec_mispredict.write(0);
-    im_.issue_pred_taken.write(0);
     while (true) {
-        if (im_.issue_halt.read() && rob_rp_.empty.read()) {
+        if (fetch_rp_.halt.read() && rob_rp_.empty.read()) {
             u32 pr10 = rat_rp_.map[10].read();
-            ret = prf_rp_.data[pr10].read() & 0xFF; 
+            ret = prf_rp_.data[pr10].read() & 0xFF;
             break;
         }
         clock_++;
-        // fprintf(stderr, "clock = %zu pc = %0x\n", clock_, im_.fetch_pc.read());
-        //if (clock_ % 100000 == 0) fprintf(stderr, "clock = %zu pc = %0x\n", clock_, im_.fetch_pc.read());
         tick();
     }
     fprintf(stdout, "%d\n", ret);
