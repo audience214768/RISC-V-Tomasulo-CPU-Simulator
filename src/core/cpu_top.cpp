@@ -127,37 +127,41 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
     size_t fs = (branch_rob_tag + 1) % ROB_SIZE;
     size_t fe = rob_rp_.last.read();
 
-    // Suppress this cycle's issue outputs. Flush only gates issue/fetch signals;
-    // commit/memory/writeback signals (from pre-branch instructions) are unaffected.
+    // Cycle 0 of the flush: suppress this cycle's issue, reset the ROB
+    // tail, invalidate RS/LSQ entries in the window in parallel (one
+    // range comparator per entry — plausible hardware), redirect the
+    // fetch (eval_execute drives exec_to_fetch_), and arm the walker that
+    // rolls the RAT / free list / ready table / RAS back one ROB entry
+    // per cycle. Commit / memory / writeback of pre-branch instructions
+    // are unaffected.
     issue_lsq_.suppressed.write(1);
     issue_rs_.suppressed.write(1);
     issue_fl_.suppressed.write(1);
     issue_rat_.suppressed.write(1);
     issue_ready_.suppressed.write(1);
+    issue_rob_.suppressed.write(1);
     flush_rob_.set_last_valid.write(1);
     flush_rob_.set_last_val.write(static_cast<u32>(fs));
 
     if (fs == fe) {
-        return ;
+        return;
     }
 
-    u8 fc = 0, ffc = 0;
+    // Arm the walker: roll back entries fe-1 .. fs, one per cycle.
+    // A second flush during the walk simply re-arms it (the ranges are
+    // disjoint, so no entry is ever rolled back twice).
+    flushing_.write(1);
+    walk_ptr_.write(static_cast<u32>((fe + ROB_SIZE - 1) % ROB_SIZE));
+    flush_end_.write(static_cast<u32>(fs));
+
+    // Undo the flushed window's fetch-stage RAS ops in one combinational
+    // step: calls are popped back, returns are re-pushed — both only move
+    // the head (the stack contents stay), so restoring the head pointer
+    // suffices. Done here (cycle 0) so it cannot race with the walker.
     u32 rhead = ras_rp_.head.read();
     size_t curr = (fe + ROB_SIZE - 1) % ROB_SIZE;
     while (curr != branch_rob_tag) {
         u32 opcode = rob_rp_.opcode[curr].read(), rd = rob_rp_.rd[curr].read();
-        u32 np = rob_rp_.new_pnum[curr].read(), op = rob_rp_.old_pnum[curr].read();
-        if (rd != 0 && np != 0) {
-            flush_rat_.restore_rd[fc].write(rd);
-            flush_rat_.restore_old[fc].write(op);
-            fc++;
-            flush_fl_.push_pregs[ffc].write(np);
-            ffc++;
-            flush_ready_.clear_req[np].write(1);
-        }
-        // Undo the fetch-stage RAS op: call push -> pop, return pop -> re-push.
-        // Both only move the head (stack contents stay), so the whole window
-        // is undone by restoring the head pointer.
         if ((opcode == 0x6F || opcode == 0x67) && rd == 1) {
             if (rhead > 0) rhead--;
         } else if (opcode == 0x67 && rd == 0 && ((rob_rp_.ins_raw[curr].read() >> 15) & 0x1F) == 1) {
@@ -166,17 +170,14 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
         if (curr == fs) break;
         curr = (curr + ROB_SIZE - 1) % ROB_SIZE;
     }
-    flush_rat_.restore_count.write(fc);
-    flush_fl_.push_count.write(ffc);
     ras_restore_.restore_valid.write(1);
     ras_restore_.restore_head.write(rhead);
 
     auto in_range = [&](size_t tag) -> bool {
-        //fprintf(stderr, "flush range fs = %d fe = %d tag = %d\n", fs, fe, tag);
         if (fs <= fe) {
-            return tag >= fs && tag < fe; 
+            return tag >= fs && tag < fe;
         } else {
-            return tag >= fs || tag < fe; 
+            return tag >= fs || tag < fe;
         }
     };
     for (int i = 0; i < RS_SIZE; i++) {
@@ -188,6 +189,39 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
         if (lsq_rp_.valid[i].read() && in_range(lsq_rp_.rob_tag[i].read())) {
             exec_lsq_.flush_mask[i].write(1);
         }
+    }
+}
+
+void TomasuloTop::eval_flush() {
+    if (!flushing_.cur()) return;
+
+    // While the walker runs, issue must not rename or allocate (the RAT is
+    // only partially restored) and fetch must not overwrite f2i (issue does
+    // not consume it), so both are held.
+    issue_lsq_.suppressed.write(1);
+    issue_rs_.suppressed.write(1);
+    issue_fl_.suppressed.write(1);
+    issue_rat_.suppressed.write(1);
+    issue_ready_.suppressed.write(1);
+    issue_rob_.suppressed.write(1);
+    issue_to_fetch_.stall.write(1);
+
+    // Roll back one ROB entry: RAT restore, free-list push, ready clear.
+    u32 ptr = walk_ptr_.cur();
+    u32 opcode = rob_rp_.opcode[ptr].read(), rd = rob_rp_.rd[ptr].read();
+    u32 np = rob_rp_.new_pnum[ptr].read(), op = rob_rp_.old_pnum[ptr].read();
+    if (rd != 0 && np != 0) {
+        flush_rat_.restore_rd[0].write(rd);
+        flush_rat_.restore_old[0].write(op);
+        flush_rat_.restore_count.write(1);
+        flush_fl_.push_pregs[0].write(np);
+        flush_fl_.push_count.write(1);
+        flush_ready_.clear_req[np].write(1);
+    }
+    if (ptr == flush_end_.cur()) {
+        flushing_.write(0);
+    } else {
+        walk_ptr_.write((ptr + ROB_SIZE - 1) % ROB_SIZE);
     }
 }
 
@@ -503,6 +537,8 @@ void TomasuloTop::eval_execute() {
             if (taken != pred) {
                 mispredict_count_++;
                 flush_count_++;
+                flush_win_sum_ += (rob_rp_.last.read() + ROB_SIZE - rbt - 1) % ROB_SIZE;
+                flush_win_max_ = std::max(flush_win_max_, (rob_rp_.last.read() + ROB_SIZE - rbt - 1) % ROB_SIZE);
                 exec_to_fetch_.mispredict.write(1);
                 exec_to_fetch_.correct_pc.write(taken ? pc + imm : pc + 4);
                 flush_pipeline(rbt);
@@ -590,6 +626,11 @@ void TomasuloTop::tick() {
 
     ras_fetch_.clear(); ras_restore_.clear();
 
+    // flush walker state: hold unless written this cycle
+    flushing_.hold();
+    walk_ptr_.hold();
+    flush_end_.hold();
+
     exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();ready_rob_.clear();
 
     mem_lsq_.clear(); mem_cdb_.clear();
@@ -610,7 +651,7 @@ void TomasuloTop::tick() {
 
     // ---- Step 1: processing evals (read ports → write-port wires), ANY ORDER ----
     eval_commit(); eval_writeback(); eval_memory();
-    eval_issue(); eval_execute();
+    eval_issue(); eval_execute(); eval_flush();
 
     // ---- Step 2: all storage modules eval (write-port wires → Register.next) ----
     prf_.eval(wb_prf_);
@@ -642,6 +683,7 @@ void TomasuloTop::tick() {
     prf_.tick(); ready_table_.tick(); rat_.tick(); free_list_.tick();
     cdb_.tick(); rs_.tick(); rob_.tick(); lsq_.tick();
     fetch_.tick(); bht_.tick(); ras_.tick();
+    flushing_.tick(); walk_ptr_.tick(); flush_end_.tick();
 }
 
 void TomasuloTop::run() {
@@ -659,4 +701,6 @@ void TomasuloTop::run() {
     fprintf(stderr, "clock=%zu %zu / %zu = %0.2f\n", clock_, branch_count_ - mispredict_count_, branch_count_, static_cast<double>(branch_count_ - mispredict_count_) / branch_count_);
     fprintf(stderr, "flush=%zu jalr_misp=%zu stalls: rs=%zu lsq=%zu rob=%zu fl=%zu\n",
             flush_count_, jalr_mispredict_count_, flush_rs_stall_, flush_lsq_stall_, flush_rob_stall_, flush_fl_stall_);
+    fprintf(stderr, "flush_win avg=%.1f max=%zu\n",
+            flush_count_ ? static_cast<double>(flush_win_sum_) / flush_count_ : 0.0, flush_win_max_);
 }

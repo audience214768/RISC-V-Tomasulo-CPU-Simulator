@@ -12,11 +12,12 @@ struct ROBReadPorts {
 };
 
 struct IssueROBWritePorts {
-    Wire<1> push_valid; 
-    Wire<7> push_opcode; 
+    Wire<1> push_valid;
+    Wire<7> push_opcode;
     Wire<5> push_rd;
     Wire<32> push_new, push_old, push_lsq, push_ins_raw;
-    void clear(){ push_valid.write(0); }
+    Wire<1> suppressed;
+    void clear(){ push_valid.write(0); suppressed.write(0); }
 };
 struct CommitROBWritePorts {
     Wire<1> set_head_valid; 

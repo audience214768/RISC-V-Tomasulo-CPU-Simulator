@@ -20,8 +20,8 @@ void ROBModule::eval(
     if (commit.set_head_valid.read()) {
         head_.next_raw() = commit.set_head_val.read();
     }
-    // P3: Issue — push new entry (only if no flush)
-    if (issue.push_valid.read() && !flush.set_last_valid.read()) {
+    // P3: Issue — push new entry (only if no flush / walker suppression)
+    if (issue.push_valid.read() && !flush.set_last_valid.read() && !issue.suppressed.read()) {
         size_t tag = last_.cur();
         entries_[tag].ready.next_raw() = 0;
         entries_[tag].ins_raw.next_raw() = issue.push_ins_raw.read();

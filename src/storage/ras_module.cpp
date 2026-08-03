@@ -6,10 +6,11 @@ void RASModule::eval(const FetchRASWritePorts &fetch, const FlushRASWritePorts &
     }
     head_.hold();
 
+    u32 h = head_.cur();
+
     // P1: Flush restore — the flushed window's undo only moves the head
     // (call pushes are popped back, return pops are re-pushed; the stack
     // contents are never rewritten), so restoring the head is sufficient.
-    u32 h = head_.cur();
     if (flush.restore_valid.read()) {
         h = flush.restore_head.read();
         head_.next_raw() = h;

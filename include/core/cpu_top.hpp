@@ -50,6 +50,7 @@ private:
     static auto ALU_I(u32 f3, u32 f7, u32 r1, u32 imm) -> u32;
     static auto branch_cond(u32 f3, u32 r1, u32 r2) -> bool;
     void flush_pipeline(size_t branch_rob_tag);
+    void eval_flush();
     void load_memory();
 
     // ---- storage modules ----
@@ -111,6 +112,11 @@ private:
     FetchRASWritePorts    ras_fetch_;
     FlushRASWritePorts    ras_restore_;
 
+    // ---- flush walker state (multi-cycle ROB rollback) ----
+    Register<1>  flushing_;
+    Register<32> walk_ptr_;
+    Register<32> flush_end_;
+
     // ---- memory write port (store commit, applied at the clock edge) ----
     MemWritePorts mem_wr_;
 
@@ -123,5 +129,7 @@ private:
     size_t mispredict_count_ = 0;
     size_t flush_count_      = 0;
     size_t jalr_mispredict_count_ = 0;
+    size_t flush_win_sum_    = 0;
+    size_t flush_win_max_    = 0;
     size_t flush_rs_stall_ = 0, flush_lsq_stall_ = 0, flush_rob_stall_ = 0, flush_fl_stall_ = 0;
 };

@@ -18,9 +18,11 @@ struct FetchRASWritePorts {
     void clear() { push_valid.write(0); pop_valid.write(0); }
 };
 
-// Flush restore: undo of the flushed window only changes the head
-// (calls are popped back, returns are re-pushed; stack content is
-// untouched), so restoring the head pointer is sufficient.
+// Flush restore: undoing the flushed window's fetch-stage RAS ops only
+// moves the head (call pushes are popped back, return pops are re-pushed;
+// the stack contents are never rewritten), so restoring the head pointer
+// undoes the whole window in one combinational step. The walker (RAT /
+// free list / ready table rollback) does not touch the RAS.
 struct FlushRASWritePorts {
     Wire<1> restore_valid;
     Wire<6> restore_head;
