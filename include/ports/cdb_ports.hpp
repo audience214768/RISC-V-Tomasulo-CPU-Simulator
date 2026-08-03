@@ -9,8 +9,8 @@ struct CDBReadPorts {
 };
 
 struct ExecCDBWritePorts {
-    static constexpr int kMaxPush = 4;
-    Wire<1> push_valid[kMaxPush]; 
+    static constexpr int kMaxPush = 1;
+    Wire<1> push_valid[kMaxPush];
     Wire<32> push_prd[kMaxPush], push_result[kMaxPush], push_rob_tag[kMaxPush];
     void clear(){
         wire_clear(push_valid);
@@ -20,7 +20,7 @@ struct ExecCDBWritePorts {
     }
 };
 struct MemCDBWritePorts {
-    static constexpr int kMaxPush = 4;
+    static constexpr int kMaxPush = 1;
     Wire<1> push_valid[kMaxPush];
     Wire<32> push_prd[kMaxPush], push_result[kMaxPush], push_rob_tag[kMaxPush];
     void clear(){

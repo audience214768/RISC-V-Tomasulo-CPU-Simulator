@@ -1,4 +1,4 @@
-#include "io.inc"  //538782
+#include "io.inc"  //538805
 // Target: use loops to calculate calculator of 6!
 //@author yixi
 

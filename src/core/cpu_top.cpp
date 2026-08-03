@@ -117,7 +117,8 @@ static bool fetch_op_wire(const CDBReadPorts &cdb, const ReadyTableReadPorts &rt
         }
     }
     if (rt.ready[prs].read()) { 
-        out = prf.data[prs].read(); return true; 
+        out = prf.data[prs].read(); 
+        return true; 
     }
     out = 0; 
     return false;
@@ -244,33 +245,37 @@ void TomasuloTop::eval_writeback() {
 }
 
 void TomasuloTop::eval_memory() {
-    int mp = 0;
-    for (int i = 0; i < LSQ_SIZE; i++) {
+    // Single-ported L1 data cache: service at most one load per cycle.
+    // Find the first (closest to head) pending load.
+    u32 lh = lsq_rp_.head.read();
+    for (int off = 0; off < LSQ_SIZE; off++) {
+        int i = (lh + off) % LSQ_SIZE;
         if (!lsq_rp_.valid[i].read()) continue;
-        if (!lsq_rp_.addr_ready[i].read()) continue;
         if (!lsq_rp_.is_load[i].read()) continue;
+        if (!lsq_rp_.addr_ready[i].read()) continue;
         if (lsq_rp_.data_ready[i].read()) continue;
 
-        u32 la = lsq_rp_.addr[i].read(), lh = lsq_rp_.head.read();
+        u32 la = lsq_rp_.addr[i].read();
         u8  lw = static_cast<u8>(lsq_rp_.width[i].read());
         bool lu = lsq_rp_.is_unsigned[i].read();
         u32 lprd = lsq_rp_.prs2_or_prd[i].read(), lrbt = lsq_rp_.rob_tag[i].read();
         bool addr_safe = true; int cs = -1;
 
+        // Store-to-load forwarding: scan backward for matching/blocking stores
         if (i != static_cast<int>(lh)) {
             int j = (i - 1 + LSQ_SIZE) % LSQ_SIZE;
             while (true) {
                 if (lsq_rp_.valid[j].read() && !lsq_rp_.is_load[j].read()) {
-                    if (!lsq_rp_.addr_ready[j].read()) { 
-                        addr_safe = false; 
-                        break; 
+                    if (!lsq_rp_.addr_ready[j].read()) {
+                        addr_safe = false;
+                        break;
                     }
-                    if (lsq_rp_.addr[j].read() == la) { 
-                        cs = j; 
+                    if (lsq_rp_.addr[j].read() == la) {
+                        cs = j;
                         if (!lsq_rp_.data_ready[j].read()) {
-                            addr_safe = false; 
+                            addr_safe = false;
                         }
-                        break; 
+                        break;
                     }
                 }
                 if (j == static_cast<int>(lh)) break;
@@ -278,47 +283,49 @@ void TomasuloTop::eval_memory() {
             }
         }
 
-        if (!addr_safe) { 
-            mem_lsq_.set_mem_wait_req[i].write(1); 
-            mem_lsq_.set_mem_wait_val[i].write(0); 
-            continue; 
+        if (!addr_safe) {
+            mem_lsq_.set_mem_wait_req[i].write(1);
+            mem_lsq_.set_mem_wait_val[i].write(0);
+            return;
         }
 
+        // MEM_LATENCY countdown
         u32 wait = lsq_rp_.mem_wait[i].read();
         if (wait == 0) {
-            wait = MEM_LATENCY; 
+            wait = MEM_LATENCY;
         }
         wait--;
-        if (wait > 0) { 
-            mem_lsq_.set_mem_wait_req[i].write(1); 
-            mem_lsq_.set_mem_wait_val[i].write(wait); 
-            continue; 
+        if (wait > 0) {
+            mem_lsq_.set_mem_wait_req[i].write(1);
+            mem_lsq_.set_mem_wait_val[i].write(wait);
+            return;
         }
 
+        // Load completes: read data from store-forwarding or memory
         u32 d = 0;
         if (cs >= 0) {
             d = lsq_rp_.data[cs].read();
-        } else { 
+        } else {
             for (int b = 0; b < lw; b++) {
                 d |= static_cast<u32>(mem_.buf[la + b]) << (8 * b);
             }
             if (!lu && lw < 4 && (d & (1u << (8 * lw - 1)))) {
-                d |= ~((1u << (8 * lw)) - 1); 
+                d |= ~((1u << (8 * lw)) - 1);
             }
         }
 
+        // Single MEM CDB channel
         if (lprd != 0) {
-            mem_cdb_.push_valid[mp].write(1);
-            mem_cdb_.push_prd[mp].write(lprd);
-            mem_cdb_.push_result[mp].write(d);
-            mem_cdb_.push_rob_tag[mp].write(lrbt);
-            mp++;
-        }
-        else {
+            mem_cdb_.push_valid[0].write(1);
+            mem_cdb_.push_prd[0].write(lprd);
+            mem_cdb_.push_result[0].write(d);
+            mem_cdb_.push_rob_tag[0].write(lrbt);
+        } else {
             ready_rob_.set_ready_req[lrbt].write(1);
         }
-        mem_lsq_.set_load_data_req[i].write(1); 
+        mem_lsq_.set_load_data_req[i].write(1);
         mem_lsq_.set_load_data_val[i].write(d);
+        return;
     }
 }
 
@@ -418,12 +425,25 @@ void TomasuloTop::eval_issue() {
 }
 
 void TomasuloTop::eval_execute() {
+    u32 jt_age = static_cast<u32>(SIZE_MAX);
+    for (int i = 0; i < RS_SIZE; i++) {
+        if (!rs_rp_.valid[i].read()) continue;
+        if (rs_rp_.opcode[i].read() != 0x67) continue;
+
+        u32 tmp;
+        bool r1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
+        bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
+        if (r1 && r2) continue;  // JALR is ready, no blocking
+
+        u32 age = (rs_rp_.rob_tag[i].read() - rob_rp_.head.read() + ROB_SIZE) % ROB_SIZE;
+        if (age < jt_age) {
+            jt_age = age;
+        }
+    }
+
     int  best_i   = -1;
     u32  best_age = static_cast<u32>(SIZE_MAX);
-    u32  jt_tag   = NONE_ROB_TAG;
-    u32  jt_age   = static_cast<u32>(SIZE_MAX);
 
-    // ---- single pass: find oldest ready instruction + oldest unready JALR ----
     for (int i = 0; i < RS_SIZE; i++) {
         if (!rs_rp_.valid[i].read()) continue;
 
@@ -432,17 +452,10 @@ void TomasuloTop::eval_execute() {
         bool r1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
         bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
 
-        // track oldest unready JALR
-        if (!r1 || !r2) {
-            if (rs_rp_.opcode[i].read() == 0x67 && age < jt_age) {
-                jt_tag = rs_rp_.rob_tag[i].read();
-                jt_age = age;
-            }
-            continue;
-        }
+        if (!r1 || !r2) continue;
 
-        // JALR blocking: if there's an older unready JALR, skip younger instructions
-        if (jt_tag != NONE_ROB_TAG && jt_age < age) continue;
+        // JALR blocking: skip instructions younger than the oldest unready JALR
+        if (jt_age != static_cast<u32>(SIZE_MAX) && jt_age < age) continue;
 
         // oldest-first selection
         if (age < best_age) {
@@ -566,7 +579,7 @@ void TomasuloTop::tick() {
     mem_lsq_.clear(); mem_cdb_.clear();
 
     wb_cdb_.clear();
-    
+
     halt_req_.clear();exec_to_fetch_.clear();issue_to_fetch_.clear();bht_exec_.clear();
 
     // ---- Step 0: all storage modules drive read-port wires ----

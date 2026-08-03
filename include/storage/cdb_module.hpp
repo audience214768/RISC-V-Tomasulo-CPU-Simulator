@@ -2,11 +2,12 @@
 #include "rtl/register.hpp"
 #include "ports/cdb_ports.hpp"
 #include "utils/config.hpp"
-#include <cstdio>
 #include <cstdlib>
 
 class CDBModule {
-    struct Entry { Register<1> valid; Register<32> prd, result, rob_tag;
+    struct Entry { 
+        Register<1> valid; 
+        Register<32> prd, result, rob_tag;
         void hold() { 
             valid.hold(); 
             prd.hold(); 
