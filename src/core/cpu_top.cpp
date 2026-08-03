@@ -203,11 +203,12 @@ void TomasuloTop::eval_commit() {
         }
 
         if (opcode == 0x23) {
-            u32 addr = lsq_rp_.addr[lt].read(), data = lsq_rp_.data[lt].read();
-            u8 w = static_cast<u8>(lsq_rp_.width[lt].read());
-            for (int b = 0; b < w; b++) {
-                mem_.buf[addr + b] = (data >> (8 * b)) & 0xFF;
-            }
+            // Drive the memory write port; the write is applied at the
+            // clock edge (see tick()), visible to loads from next cycle.
+            mem_wr_.valid.write(1);
+            mem_wr_.addr.write(lsq_rp_.addr[lt].read());
+            mem_wr_.data.write(lsq_rp_.data[lt].read());
+            mem_wr_.width.write(lsq_rp_.width[lt].read());
             commit_lsq_.invalidate_req[lt].write(1);
         }
         head = (head + 1) % ROB_SIZE;
@@ -259,22 +260,16 @@ void TomasuloTop::eval_memory() {
         u8  lw = static_cast<u8>(lsq_rp_.width[i].read());
         bool lu = lsq_rp_.is_unsigned[i].read();
         u32 lprd = lsq_rp_.prs2_or_prd[i].read(), lrbt = lsq_rp_.rob_tag[i].read();
-        bool addr_safe = true; int cs = -1;
+        bool addr_safe = true;
 
-        // Store-to-load forwarding: scan backward for matching/blocking stores
+        // Store-to-load blocking: a load may not pass an older store whose
+        // address is not yet known (conservative disambiguation).
         if (i != static_cast<int>(lh)) {
             int j = (i - 1 + LSQ_SIZE) % LSQ_SIZE;
             while (true) {
                 if (lsq_rp_.valid[j].read() && !lsq_rp_.is_load[j].read()) {
                     if (!lsq_rp_.addr_ready[j].read()) {
                         addr_safe = false;
-                        break;
-                    }
-                    if (lsq_rp_.addr[j].read() == la) {
-                        cs = j;
-                        if (!lsq_rp_.data_ready[j].read()) {
-                            addr_safe = false;
-                        }
                         break;
                     }
                 }
@@ -301,19 +296,31 @@ void TomasuloTop::eval_memory() {
             return;
         }
 
-        // Load completes: read data from store-forwarding or memory
+        // Load completes: byte-merge from the youngest older store covering
+        // each byte, memory elsewhere, then sign-extend (hardware semantics).
         u32 d = 0;
-        if (cs >= 0) {
-            d = lsq_rp_.data[cs].read();
-        } else {
-            for (int b = 0; b < lw; b++) {
-                d |= static_cast<u32>(mem_.buf[la + b]) << (8 * b);
+        for (int b = 0; b < lw; b++) {
+            u32 byte = static_cast<u32>(mem_.buf[la + b]);
+            if (i != static_cast<int>(lh)) {
+                int j = (i - 1 + LSQ_SIZE) % LSQ_SIZE;
+                while (true) {
+                    if (lsq_rp_.valid[j].read() && !lsq_rp_.is_load[j].read()) {
+                        u32 sa = lsq_rp_.addr[j].read();
+                        u8 sw = static_cast<u8>(lsq_rp_.width[j].read());
+                        if (sa <= la + b && la + b < sa + sw) {
+                            byte = (lsq_rp_.data[j].read() >> (8 * (la + b - sa))) & 0xFF;
+                            break;
+                        }
+                    }
+                    if (j == static_cast<int>(lh)) break;
+                    j = (j - 1 + LSQ_SIZE) % LSQ_SIZE;
+                }
             }
-            if (!lu && lw < 4 && (d & (1u << (8 * lw - 1)))) {
-                d |= ~((1u << (8 * lw)) - 1);
-            }
+            d |= byte << (8 * b);
         }
-
+        if (!lu && lw < 4 && (d & (1u << (8 * lw - 1)))) {
+            d |= ~((1u << (8 * lw)) - 1);
+        }
         // Single MEM CDB channel
         if (lprd != 0) {
             mem_cdb_.push_valid[0].write(1);
@@ -475,6 +482,7 @@ void TomasuloTop::eval_execute() {
 
     u32 res = 0;
     bool wcdb = true;
+    bool done = true;
     switch (opcode) {
         case 0x33:
             res = ALU_R(f3, f7, rs1, rs2);
@@ -544,10 +552,32 @@ void TomasuloTop::eval_execute() {
             flush_pipeline(rbt);
             break;
         }
-        case 0x0F:
+        case 0x0F: {
+            // FENCE: complete only when every older memory op
+            // (rob_tag in ring [rob_head, rbt)) has drained from the LSQ.
+            bool drained = true;
+            u32 d_fence = (rbt + ROB_SIZE - rob_rp_.head.read()) % ROB_SIZE;
+            u32 lt = lsq_rp_.head.read();
+            while (lt != lsq_rp_.last.read()) {
+                if (lsq_rp_.valid[lt].read()) {
+                    u32 d_op = (lsq_rp_.rob_tag[lt].read() + ROB_SIZE - rob_rp_.head.read()) % ROB_SIZE;
+                    if (d_op < d_fence) {
+                        drained = false;
+                        break;
+                    }
+                }
+                lt = (lt + 1) % LSQ_SIZE;
+            }
+            if (drained) {
+                ready_rob_.set_ready_req[rbt].write(1);
+                done = true;
+            } else {
+                done = false;   // keep the RS entry, retry next cycle
+            }
             res = 0;
             wcdb = false;
             break;
+        }
         default:
             fprintf(stderr, "unknown op:0x%x pc=0x%x\n", opcode, pc);
             exit(1);
@@ -558,8 +588,10 @@ void TomasuloTop::eval_execute() {
         exec_cdb_.push_result[0].write(res);
         exec_cdb_.push_rob_tag[0].write(rbt);
     }
-    exec_rs_.clear_idx[0].write(static_cast<u8>(best_i));
-    exec_rs_.clear_count.write(static_cast<u8>(1));
+    if (done) {
+        exec_rs_.clear_idx[0].write(static_cast<u8>(best_i));
+        exec_rs_.clear_count.write(static_cast<u8>(1));
+    }
 }
 
 
@@ -581,6 +613,8 @@ void TomasuloTop::tick() {
     wb_cdb_.clear();
 
     halt_req_.clear();exec_to_fetch_.clear();issue_to_fetch_.clear();bht_exec_.clear();
+
+    mem_wr_.clear();
 
     // ---- Step 0: all storage modules drive read-port wires ----
     prf_.drive_read_ports(prf_rp_); ready_table_.drive_read_ports(rt_rp_);
@@ -604,6 +638,16 @@ void TomasuloTop::tick() {
     cdb_.eval(exec_cdb_, mem_cdb_, wb_cdb_);
     fetch_.eval(halt_req_, exec_to_fetch_, issue_to_fetch_, mem_);
     bht_.eval(bht_exec_);
+
+    // ---- Store commit takes effect at the clock edge: the memory write
+    // driven this cycle by eval_commit is applied here, visible next cycle.
+    if (mem_wr_.valid.read()) {
+        u32 waddr = mem_wr_.addr.read(), wdata = mem_wr_.data.read();
+        u8 ww = static_cast<u8>(mem_wr_.width.read());
+        for (int b = 0; b < ww; b++) {
+            mem_.buf[waddr + b] = (wdata >> (8 * b)) & 0xFF;
+        }
+    }
 
     // ---- x0 force ----
     prf_.force(0, 0); ready_table_.force(0, true);

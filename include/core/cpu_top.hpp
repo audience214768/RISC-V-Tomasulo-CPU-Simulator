@@ -12,6 +12,7 @@
 #include "storage/bht_module.hpp"
 
 #include "ports/prf_ports.hpp"
+#include "ports/mem_ports.hpp"
 #include "ports/ready_table_ports.hpp"
 #include "ports/rat_ports.hpp"
 #include "ports/free_list_ports.hpp"
@@ -103,6 +104,9 @@ private:
     ExecToFetchWritePorts  exec_to_fetch_;
     IssueToFetchWritePorts issue_to_fetch_;
     ExecBHTWritePorts     bht_exec_;
+
+    // ---- memory write port (store commit, applied at the clock edge) ----
+    MemWritePorts mem_wr_;
 
     // ---- external memory ----
     MemState mem_;
