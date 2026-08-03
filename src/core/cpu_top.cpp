@@ -286,9 +286,16 @@ void TomasuloTop::eval_writeback() {
 }
 
 void TomasuloTop::eval_memory() {
-    // Single-ported L1 data cache: service at most one load per cycle.
-    // Find the first (closest to head) pending load.
+    // Single-ported L1 data cache with pipelined accesses: at most one
+    // access is *issued* per cycle (start arbitration) and at most one
+    // completes per cycle (CDB arbitration); accesses already in flight
+    // run their MEM_LATENCY countdowns in parallel — this is the
+    // throughput-1/cycle / latency-N-cycles pipeline model of a real
+    // single-port cache. A load that finished its countdown but lost the
+    // CDB arbitration holds at wait=1 and retries.
     u32 lh = lsq_rp_.head.read();
+    bool mem_start_used = false;
+    bool mem_cdb_used = false;
     for (int off = 0; off < LSQ_SIZE; off++) {
         int i = (lh + off) % LSQ_SIZE;
         if (!lsq_rp_.valid[i].read()) continue;
@@ -321,19 +328,22 @@ void TomasuloTop::eval_memory() {
         if (!addr_safe) {
             mem_lsq_.set_mem_wait_req[i].write(1);
             mem_lsq_.set_mem_wait_val[i].write(0);
-            return;
+            continue;
         }
 
-        // MEM_LATENCY countdown
+        // MEM_LATENCY countdown. wait==0 means "not issued yet": the load
+        // must win the single access-issue slot before its latency starts.
         u32 wait = lsq_rp_.mem_wait[i].read();
         if (wait == 0) {
+            if (mem_start_used) continue;   // port busy this cycle, retry
+            mem_start_used = true;
             wait = MEM_LATENCY;
         }
         wait--;
         if (wait > 0) {
             mem_lsq_.set_mem_wait_req[i].write(1);
             mem_lsq_.set_mem_wait_val[i].write(wait);
-            return;
+            continue;
         }
 
         // Load completes: byte-merge from the youngest older store covering
@@ -361,7 +371,14 @@ void TomasuloTop::eval_memory() {
         if (!lu && lw < 4 && (d & (1u << (8 * lw - 1)))) {
             d |= ~((1u << (8 * lw)) - 1);
         }
-        // Single MEM CDB channel
+        // Single MEM CDB channel: at most one completion per cycle
+        // (oldest first — the traversal order). Losers hold at wait=1.
+        if (mem_cdb_used) {
+            mem_lsq_.set_mem_wait_req[i].write(1);
+            mem_lsq_.set_mem_wait_val[i].write(1);
+            continue;
+        }
+        mem_cdb_used = true;
         if (lprd != 0) {
             mem_cdb_.push_valid[0].write(1);
             mem_cdb_.push_prd[0].write(lprd);
@@ -372,7 +389,6 @@ void TomasuloTop::eval_memory() {
         }
         mem_lsq_.set_load_data_req[i].write(1);
         mem_lsq_.set_load_data_val[i].write(d);
-        return;
     }
 }
 
