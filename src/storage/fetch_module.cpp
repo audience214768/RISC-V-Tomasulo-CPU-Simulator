@@ -1,6 +1,4 @@
 #include "storage/fetch_module.hpp"
-#include <bit>
-#include <array>
 
 void FetchModule::eval(
     const HaltRequestWritePorts &halt_req,

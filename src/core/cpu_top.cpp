@@ -4,8 +4,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <bit>
-#include <array>
 #include <string>
 #include <iostream>
 #include <sstream>
@@ -555,18 +553,21 @@ void TomasuloTop::eval_execute() {
 void TomasuloTop::tick() {
     // ---- Clear all write-port Wires (pulse semantics, one cycle only) ----
     wb_prf_.clear(); wb_ready_.clear();
+
     issue_ready_.clear(); issue_rat_.clear(); issue_fl_.clear(); issue_rob_.clear();
     issue_rs_.clear(); issue_lsq_.clear(); lsq_pnum_.clear();
+
     flush_ready_.clear(); flush_rat_.clear(); flush_fl_.clear(); flush_rob_.clear();
+
     commit_fl_.clear(); commit_rob_.clear(); commit_lsq_.clear();
-    ready_rob_.clear();
-    exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();
+
+    exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();ready_rob_.clear();
+
     mem_lsq_.clear(); mem_cdb_.clear();
+
     wb_cdb_.clear();
-    halt_req_.clear();
-    exec_to_fetch_.clear();
-    issue_to_fetch_.clear();
-    bht_exec_.clear();
+    
+    halt_req_.clear();exec_to_fetch_.clear();issue_to_fetch_.clear();bht_exec_.clear();
 
     // ---- Step 0: all storage modules drive read-port wires ----
     prf_.drive_read_ports(prf_rp_); ready_table_.drive_read_ports(rt_rp_);
