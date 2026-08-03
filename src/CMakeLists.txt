@@ -9,7 +9,8 @@ add_executable(code main.cpp
     storage/rob_module.cpp
     storage/lsq_module.cpp
     storage/fetch_module.cpp
-    storage/bht_module.cpp)
+    storage/bht_module.cpp
+    storage/ras_module.cpp)
 
 target_include_directories(code PRIVATE
     ${PROJECT_SOURCE_DIR}/include

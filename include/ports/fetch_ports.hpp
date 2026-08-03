@@ -7,6 +7,8 @@ struct FetchReadPorts {
     Wire<32> f2i_raw;
     Wire<32> f2i_pc;
     Wire<1>  f2i_valid;
+    Wire<1>  f2i_pred;        // prediction made at fetch, rides with the inst
+    Wire<32> f2i_pred_target; // JALR return target (RAS top); else unused
     Wire<1>  halt;
 };
 
@@ -23,7 +25,5 @@ struct ExecToFetchWritePorts {
 
 struct IssueToFetchWritePorts {
     Wire<1>  stall;
-    Wire<1>  pred_taken;
-    Wire<32> pred_target;
-    void clear() { stall.write(0); pred_taken.write(0); }
+    void clear() { stall.write(0); }
 };

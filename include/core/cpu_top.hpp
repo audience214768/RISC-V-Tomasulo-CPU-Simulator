@@ -10,6 +10,7 @@
 #include "storage/lsq_module.hpp"
 #include "storage/fetch_module.hpp"
 #include "storage/bht_module.hpp"
+#include "storage/ras_module.hpp"
 
 #include "ports/prf_ports.hpp"
 #include "ports/mem_ports.hpp"
@@ -22,6 +23,7 @@
 #include "ports/lsq_ports.hpp"
 #include "ports/fetch_ports.hpp"
 #include "ports/bht_ports.hpp"
+#include "ports/ras_ports.hpp"
 
 #include "utils/config.hpp"
 #include "utils/types.hpp"
@@ -61,6 +63,7 @@ private:
     LSQModule        lsq_;
     FetchModule      fetch_;
     BHTModule        bht_;
+    RASModule        ras_;
 
     // ---- read port wires ----
     PRFReadPorts        prf_rp_;
@@ -73,6 +76,7 @@ private:
     LSQReadPorts        lsq_rp_;
     FetchReadPorts      fetch_rp_;
     BHTReadPorts        bht_rp_;
+    RASReadPorts        ras_rp_;
 
     // ---- write port wires (per-writer bundles) ----
     WBPRFWritePorts       wb_prf_;
@@ -104,6 +108,8 @@ private:
     ExecToFetchWritePorts  exec_to_fetch_;
     IssueToFetchWritePorts issue_to_fetch_;
     ExecBHTWritePorts     bht_exec_;
+    FetchRASWritePorts    ras_fetch_;
+    FlushRASWritePorts    ras_restore_;
 
     // ---- memory write port (store commit, applied at the clock edge) ----
     MemWritePorts mem_wr_;
@@ -115,7 +121,7 @@ private:
     size_t clock_           = 0;
     size_t branch_count_    = 0;
     size_t mispredict_count_ = 0;
-
-    // ---- branch predictor ----
-    bool    bht_pred_[ROB_SIZE];      // per-ROB-slot prediction snapshot
+    size_t flush_count_      = 0;
+    size_t jalr_mispredict_count_ = 0;
+    size_t flush_rs_stall_ = 0, flush_lsq_stall_ = 0, flush_rob_stall_ = 0, flush_fl_stall_ = 0;
 };

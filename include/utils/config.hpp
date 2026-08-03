@@ -14,6 +14,7 @@ constexpr size_t LSQ_SIZE = 18;
 constexpr size_t CDB_SIZE = 2;
 constexpr size_t BUF_SIZE = 256 * 1024;
 constexpr size_t BHT_SIZE = 32;
+constexpr size_t RAS_SIZE = 32;
 
 constexpr size_t NONE_ROB_TAG = ROB_SIZE + 1;
 

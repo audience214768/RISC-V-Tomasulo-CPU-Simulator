@@ -12,8 +12,7 @@ TomasuloTop::TomasuloTop() {
     std::memset(mem_.buf, 0, sizeof(mem_.buf));
     prf_.reset(); ready_table_.reset(); rat_.reset(); free_list_.reset();
     cdb_.reset(); rs_.reset(); rob_.reset(); lsq_.reset();
-    fetch_.reset(); bht_.reset();
-    std::memset(bht_pred_, 0, sizeof(bht_pred_));
+    fetch_.reset(); bht_.reset(); ras_.reset();
     load_memory();
 }
 
@@ -143,27 +142,34 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
     }
 
     u8 fc = 0, ffc = 0;
+    u32 rhead = ras_rp_.head.read();
     size_t curr = (fe + ROB_SIZE - 1) % ROB_SIZE;
-    //fprintf(stderr, "flush: head = %d last = %d branch_rob_tag : %zu\n", rob_rp_.head.read(), rob_rp_.last.read(), branch_rob_tag);
     while (curr != branch_rob_tag) {
-        //fprintf(stderr, "%zu ", curr);
         u32 opcode = rob_rp_.opcode[curr].read(), rd = rob_rp_.rd[curr].read();
         u32 np = rob_rp_.new_pnum[curr].read(), op = rob_rp_.old_pnum[curr].read();
-        //fprintf(stderr, "%0x %d\n", rob_rp_.ins_raw[curr].read(), np);
         if (rd != 0 && np != 0) {
-            flush_rat_.restore_rd[fc].write(rd); 
-            flush_rat_.restore_old[fc].write(op); 
+            flush_rat_.restore_rd[fc].write(rd);
+            flush_rat_.restore_old[fc].write(op);
             fc++;
-            flush_fl_.push_pregs[ffc].write(np); 
+            flush_fl_.push_pregs[ffc].write(np);
             ffc++;
             flush_ready_.clear_req[np].write(1);
-            //if (np == 41) fprintf(stderr, "flush the 41\n");
+        }
+        // Undo the fetch-stage RAS op: call push -> pop, return pop -> re-push.
+        // Both only move the head (stack contents stay), so the whole window
+        // is undone by restoring the head pointer.
+        if ((opcode == 0x6F || opcode == 0x67) && rd == 1) {
+            if (rhead > 0) rhead--;
+        } else if (opcode == 0x67 && rd == 0 && ((rob_rp_.ins_raw[curr].read() >> 15) & 0x1F) == 1) {
+            if (rhead < RAS_SIZE) rhead++;
         }
         if (curr == fs) break;
         curr = (curr + ROB_SIZE - 1) % ROB_SIZE;
     }
     flush_rat_.restore_count.write(fc);
     flush_fl_.push_count.write(ffc);
+    ras_restore_.restore_valid.write(1);
+    ras_restore_.restore_head.write(rhead);
 
     auto in_range = [&](size_t tag) -> bool {
         //fprintf(stderr, "flush range fs = %d fe = %d tag = %d\n", fs, fe, tag);
@@ -356,23 +362,12 @@ void TomasuloTop::eval_issue() {
     bool mmo = (ins.opcode == 0x3 || ins.opcode == 0x23);
 
     if (rob_rp_.full.read() || rs_rp_.full.read() || wrf && fl_rp_.empty.read() || mmo && lsq_rp_.full.read()) {
-        if (rob_rp_.full.read()) fprintf(stderr, "Rob is full\n");
-        if (rs_rp_.full.read()) fprintf(stderr, "rs is full\n");
-        if (fl_rp_.empty.read()) fprintf(stderr, "freelist full\n");
-        if (lsq_rp_.full.read()) fprintf(stderr, "lsq full\n");
+        if (rs_rp_.full.read()) flush_rs_stall_++;
+        if (lsq_rp_.full.read()) flush_lsq_stall_++;
+        if (rob_rp_.full.read()) flush_rob_stall_++;
+        if (fl_rp_.empty.read()) flush_fl_stall_++;
         issue_to_fetch_.stall.write(1);
         return;
-    }
-
-    // BHT prediction for conditional branches
-    if (ins.opcode == 0x63) {
-        size_t bht_idx = (pc >> 2) % BHT_SIZE;
-        bool pred = (bht_rp_.counters[bht_idx].read() >= 2);
-        bht_pred_[rob_rp_.last.read()] = pred;
-        if (pred) {
-            issue_to_fetch_.pred_taken.write(1);
-            issue_to_fetch_.pred_target.write(pc + ins.imm);
-        }
     }
 
     // LSQ push
@@ -419,11 +414,9 @@ void TomasuloTop::eval_issue() {
     issue_rs_.push_lsq_tag.write(static_cast<u32>(lsq_tag));
     issue_rs_.push_ins_raw.write(ins.raw); issue_rs_.push_ins_imm.write(ins.imm);
 
-    // JAL prediction
-    if (ins.opcode == 0x6F) {
-        //fprintf(stderr, "[ISS JAL] pc=0x%x rd=%d np=%u op=%u tgt=0x%x\n", pc, ins.rd, np, op, pc + ins.imm);
-        issue_to_fetch_.pred_taken.write(1); issue_to_fetch_.pred_target.write(pc + ins.imm);
-    }
+    // Prediction made at fetch rides with the instruction into the RS entry
+    issue_rs_.push_pred_taken.write(fetch_rp_.f2i_pred.read());
+    issue_rs_.push_pred_target.write(fetch_rp_.f2i_pred_target.read());
 
     // ROB push
     issue_rob_.push_valid.write(1); issue_rob_.push_opcode.write(ins.opcode);
@@ -432,22 +425,6 @@ void TomasuloTop::eval_issue() {
 }
 
 void TomasuloTop::eval_execute() {
-    u32 jt_age = static_cast<u32>(SIZE_MAX);
-    for (int i = 0; i < RS_SIZE; i++) {
-        if (!rs_rp_.valid[i].read()) continue;
-        if (rs_rp_.opcode[i].read() != 0x67) continue;
-
-        u32 tmp;
-        bool r1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
-        bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
-        if (r1 && r2) continue;  // JALR is ready, no blocking
-
-        u32 age = (rs_rp_.rob_tag[i].read() - rob_rp_.head.read() + ROB_SIZE) % ROB_SIZE;
-        if (age < jt_age) {
-            jt_age = age;
-        }
-    }
-
     int  best_i   = -1;
     u32  best_age = static_cast<u32>(SIZE_MAX);
 
@@ -460,9 +437,6 @@ void TomasuloTop::eval_execute() {
         bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
 
         if (!r1 || !r2) continue;
-
-        // JALR blocking: skip instructions younger than the oldest unready JALR
-        if (jt_age != static_cast<u32>(SIZE_MAX) && jt_age < age) continue;
 
         // oldest-first selection
         if (age < best_age) {
@@ -524,10 +498,11 @@ void TomasuloTop::eval_execute() {
             branch_count_++;
             bool taken = branch_cond(f3, rs1, rs2);
             size_t bht_idx = (pc >> 2) % BHT_SIZE;
-            bool pred = bht_pred_[rbt];
+            bool pred = rs_rp_.pred_taken[best_i].read() != 0;
 
             if (taken != pred) {
                 mispredict_count_++;
+                flush_count_++;
                 exec_to_fetch_.mispredict.write(1);
                 exec_to_fetch_.correct_pc.write(taken ? pc + imm : pc + 4);
                 flush_pipeline(rbt);
@@ -545,11 +520,18 @@ void TomasuloTop::eval_execute() {
             res = pc + 4;
             break;
         case 0x67: {
+            // JALR: flush only when the actual target differs from the
+            // fetch-stage prediction (RAS top for rets, pc+4 otherwise).
             u32 t = (rs1 + imm) & ~1u;
             res = pc + 4;
-            exec_to_fetch_.mispredict.write(1);
-            exec_to_fetch_.correct_pc.write(t);
-            flush_pipeline(rbt);
+            bool pred = rs_rp_.pred_taken[best_i].read() != 0;
+            u32 pt = pred ? rs_rp_.pred_target[best_i].read() : pc + 4;
+            if (t != pt) {
+                jalr_mispredict_count_++;
+                exec_to_fetch_.mispredict.write(1);
+                exec_to_fetch_.correct_pc.write(t);
+                flush_pipeline(rbt);
+            }
             break;
         }
         case 0x0F: {
@@ -606,6 +588,8 @@ void TomasuloTop::tick() {
 
     commit_fl_.clear(); commit_rob_.clear(); commit_lsq_.clear();
 
+    ras_fetch_.clear(); ras_restore_.clear();
+
     exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();ready_rob_.clear();
 
     mem_lsq_.clear(); mem_cdb_.clear();
@@ -622,6 +606,7 @@ void TomasuloTop::tick() {
     cdb_.drive_read_ports(cdb_rp_); rs_.drive_read_ports(rs_rp_);
     rob_.drive_read_ports(rob_rp_); lsq_.drive_read_ports(lsq_rp_);
     fetch_.drive_read_ports(fetch_rp_); bht_.drive_read_ports(bht_rp_);
+    ras_.drive_read_ports(ras_rp_);
 
     // ---- Step 1: processing evals (read ports → write-port wires), ANY ORDER ----
     eval_commit(); eval_writeback(); eval_memory();
@@ -636,8 +621,9 @@ void TomasuloTop::tick() {
     rs_.eval(issue_rs_, exec_rs_);
     lsq_.eval(issue_lsq_, lsq_pnum_, exec_lsq_, mem_lsq_, commit_lsq_);
     cdb_.eval(exec_cdb_, mem_cdb_, wb_cdb_);
-    fetch_.eval(halt_req_, exec_to_fetch_, issue_to_fetch_, mem_);
+    fetch_.eval(halt_req_, exec_to_fetch_, issue_to_fetch_, bht_rp_, ras_rp_, ras_fetch_, mem_);
     bht_.eval(bht_exec_);
+    ras_.eval(ras_fetch_, ras_restore_);
 
     // ---- Store commit takes effect at the clock edge: the memory write
     // driven this cycle by eval_commit is applied here, visible next cycle.
@@ -655,7 +641,7 @@ void TomasuloTop::tick() {
     // ---- Step 3: tick all ----
     prf_.tick(); ready_table_.tick(); rat_.tick(); free_list_.tick();
     cdb_.tick(); rs_.tick(); rob_.tick(); lsq_.tick();
-    fetch_.tick(); bht_.tick();
+    fetch_.tick(); bht_.tick(); ras_.tick();
 }
 
 void TomasuloTop::run() {
@@ -671,4 +657,6 @@ void TomasuloTop::run() {
     }
     fprintf(stdout, "%d\n", ret);
     fprintf(stderr, "clock=%zu %zu / %zu = %0.2f\n", clock_, branch_count_ - mispredict_count_, branch_count_, static_cast<double>(branch_count_ - mispredict_count_) / branch_count_);
+    fprintf(stderr, "flush=%zu jalr_misp=%zu stalls: rs=%zu lsq=%zu rob=%zu fl=%zu\n",
+            flush_count_, jalr_mispredict_count_, flush_rs_stall_, flush_lsq_stall_, flush_rob_stall_, flush_fl_stall_);
 }

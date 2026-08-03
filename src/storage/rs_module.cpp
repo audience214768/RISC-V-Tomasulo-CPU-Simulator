@@ -43,5 +43,7 @@ void RSModule::eval(
         e.rob_tag.next_raw() = issue.push_rob_tag.read(); e.lsq_tag.next_raw() = issue.push_lsq_tag.read();
         e.prs1.next_raw() = issue.push_prs1.read(); e.prs2.next_raw() = issue.push_prs2.read();
         e.prd.next_raw() = issue.push_prd.read(); e.pc.next_raw() = issue.push_pc.read();
+        e.pred_taken.next_raw() = issue.push_pred_taken.read();
+        e.pred_target.next_raw() = issue.push_pred_target.read();
     }
 }
