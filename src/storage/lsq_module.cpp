@@ -60,10 +60,13 @@ void LSQModule::eval(
         }
     }
 
-    // P5: Memory — mem_wait + load_data + invalidate
+    // P5: Memory — mem_wait + load latch + load_data + invalidate
     for (int i = 0; i < LSQ_SIZE; i++) {
         if (mem.set_mem_wait_req[i].read()) {
             entries_[i].mem_wait.next_raw() = mem.set_mem_wait_val[i].read();
+        }
+        if (mem.set_load_latch_req[i].read()) {
+            entries_[i].data.next_raw() = mem.set_load_latch_val[i].read();
         }
         if (mem.set_load_data_req[i].read()) {
             entries_[i].data_ready.next_raw() = 1;

@@ -38,14 +38,17 @@ struct ExecLSQWritePorts {
     }
 };
 struct MemLSQWritePorts {
-    Wire<1> set_mem_wait_req[LSQ_SIZE]; 
+    Wire<1> set_mem_wait_req[LSQ_SIZE];
     Wire<32> set_mem_wait_val[LSQ_SIZE];
-    Wire<1> set_load_data_req[LSQ_SIZE]; 
+    Wire<1> set_load_data_req[LSQ_SIZE];
     Wire<32> set_load_data_val[LSQ_SIZE];
+    Wire<1> set_load_latch_req[LSQ_SIZE];   // latch access-time merged data
+    Wire<32> set_load_latch_val[LSQ_SIZE];
     Wire<1> invalidate_req[LSQ_SIZE];
     void clear(){
         wire_clear(set_mem_wait_req);
         wire_clear(set_load_data_req);
+        wire_clear(set_load_latch_req);
         wire_clear(invalidate_req);
     }
 };

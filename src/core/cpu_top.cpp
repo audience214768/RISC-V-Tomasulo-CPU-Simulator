@@ -9,7 +9,6 @@
 #include <sstream>
 
 TomasuloTop::TomasuloTop() {
-    std::memset(mem_.buf, 0, sizeof(mem_.buf));
     prf_.reset(); ready_table_.reset(); rat_.reset(); free_list_.reset();
     cdb_.reset(); rs_.reset(); rob_.reset(); lsq_.reset();
     fetch_.reset(); bht_.reset(); ras_.reset();
@@ -28,7 +27,7 @@ void TomasuloTop::load_memory() {
             std::stringstream ss(line); 
             std::string sb;
             while (ss >> sb) { 
-                mem_.buf[a + o] = static_cast<u8>(std::stoul(sb, nullptr, 16)); 
+                memory_.write_init(a + o, static_cast<u8>(std::stoul(sb, nullptr, 16)));
                 o++; 
             } 
         }
@@ -127,13 +126,6 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
     size_t fs = (branch_rob_tag + 1) % ROB_SIZE;
     size_t fe = rob_rp_.last.read();
 
-    // Cycle 0 of the flush: suppress this cycle's issue, reset the ROB
-    // tail, invalidate RS/LSQ entries in the window in parallel (one
-    // range comparator per entry — plausible hardware), redirect the
-    // fetch (eval_execute drives exec_to_fetch_), and arm the walker that
-    // rolls the RAT / free list / ready table / RAS back one ROB entry
-    // per cycle. Commit / memory / writeback of pre-branch instructions
-    // are unaffected.
     issue_lsq_.suppressed.write(1);
     issue_rs_.suppressed.write(1);
     issue_fl_.suppressed.write(1);
@@ -147,9 +139,6 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
         return;
     }
 
-    // Arm the walker: roll back entries fe-1 .. fs, one per cycle.
-    // A second flush during the walk simply re-arms it (the ranges are
-    // disjoint, so no entry is ever rolled back twice).
     flushing_.write(1);
     walk_ptr_.write(static_cast<u32>((fe + ROB_SIZE - 1) % ROB_SIZE));
     flush_end_.write(static_cast<u32>(fs));
@@ -195,9 +184,6 @@ void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
 void TomasuloTop::eval_flush() {
     if (!flushing_.cur()) return;
 
-    // While the walker runs, issue must not rename or allocate (the RAT is
-    // only partially restored) and fetch must not overwrite f2i (issue does
-    // not consume it), so both are held.
     issue_lsq_.suppressed.write(1);
     issue_rs_.suppressed.write(1);
     issue_fl_.suppressed.write(1);
@@ -228,30 +214,32 @@ void TomasuloTop::eval_flush() {
 void TomasuloTop::eval_commit() {
     u32 head = rob_rp_.head.read(), last = rob_rp_.last.read();
 
-    // single commit per cycle (COMMIT_WIDTH = 1)
     u8 flc = 0;
     if (head != last && rob_rp_.ready[head].read()) {
         u32 opcode = rob_rp_.opcode[head].read(), rd = rob_rp_.rd[head].read();
         u32 np = rob_rp_.new_pnum[head].read(), op = rob_rp_.old_pnum[head].read();
         u32 lt = rob_rp_.lsq_tag[head].read();
 
-        if (rd != 0 && (opcode == 0x33 || opcode == 0x13 || opcode == 0x03 || opcode == 0x6F || opcode == 0x67 || opcode == 0x17 || opcode == 0x37)) {
-            if (np != 0) {
-                commit_fl_.push_pregs[0].write(op);
-                flc = 1;
+        if (opcode == 0x23 && mem_rp_.sb_full.read()) {
+            cache_sb_stall_++; //only for test
+        } else {
+            if (rd != 0 && (opcode == 0x33 || opcode == 0x13 || opcode == 0x03 || opcode == 0x6F || opcode == 0x67 || opcode == 0x17 || opcode == 0x37)) {
+                if (np != 0) {
+                    commit_fl_.push_pregs[0].write(op);
+                    flc = 1;
+                }
             }
-        }
 
-        if (opcode == 0x23) {
-            // Drive the memory write port; the write is applied at the
-            // clock edge (see tick()), visible to loads from next cycle.
-            mem_wr_.valid.write(1);
-            mem_wr_.addr.write(lsq_rp_.addr[lt].read());
-            mem_wr_.data.write(lsq_rp_.data[lt].read());
-            mem_wr_.width.write(lsq_rp_.width[lt].read());
-            commit_lsq_.invalidate_req[lt].write(1);
+            if (opcode == 0x23) {
+                mem_store_.valid.write(1);
+                mem_store_.addr.write(lsq_rp_.addr[lt].read());
+                mem_store_.data.write(lsq_rp_.data[lt].read());
+                mem_store_.width.write(lsq_rp_.width[lt].read());
+                commit_lsq_.invalidate_req[lt].write(1);
+            }
+            commit_count_++;
+            head = (head + 1) % ROB_SIZE;
         }
-        head = (head + 1) % ROB_SIZE;
     }
     commit_fl_.push_count.write(flc);
     commit_rob_.set_head_valid.write(1);
@@ -286,16 +274,12 @@ void TomasuloTop::eval_writeback() {
 }
 
 void TomasuloTop::eval_memory() {
-    // Single-ported L1 data cache with pipelined accesses: at most one
-    // access is *issued* per cycle (start arbitration) and at most one
-    // completes per cycle (CDB arbitration); accesses already in flight
-    // run their MEM_LATENCY countdowns in parallel — this is the
-    // throughput-1/cycle / latency-N-cycles pipeline model of a real
-    // single-port cache. A load that finished its countdown but lost the
-    // CDB arbitration holds at wait=1 and retries.
+    // Blocking cache: while a line refill is in flight no load may access
+    // (the refill owns the single access slot).
+    if (mem_rp_.refill_busy.read()) return;
+
     u32 lh = lsq_rp_.head.read();
     bool mem_start_used = false;
-    bool mem_cdb_used = false;
     for (int off = 0; off < LSQ_SIZE; off++) {
         int i = (lh + off) % LSQ_SIZE;
         if (!lsq_rp_.valid[i].read()) continue;
@@ -303,14 +287,12 @@ void TomasuloTop::eval_memory() {
         if (!lsq_rp_.addr_ready[i].read()) continue;
         if (lsq_rp_.data_ready[i].read()) continue;
 
-        u32 la = lsq_rp_.addr[i].read();
-        u8  lw = static_cast<u8>(lsq_rp_.width[i].read());
+        u32 load_address = lsq_rp_.addr[i].read();
+        u8  load_width = static_cast<u8>(lsq_rp_.width[i].read());
         bool lu = lsq_rp_.is_unsigned[i].read();
         u32 lprd = lsq_rp_.prs2_or_prd[i].read(), lrbt = lsq_rp_.rob_tag[i].read();
         bool addr_safe = true;
 
-        // Store-to-load blocking: a load may not pass an older store whose
-        // address is not yet known (conservative disambiguation).
         if (i != static_cast<int>(lh)) {
             int j = (i - 1 + LSQ_SIZE) % LSQ_SIZE;
             while (true) {
@@ -331,13 +313,44 @@ void TomasuloTop::eval_memory() {
             continue;
         }
 
-        // MEM_LATENCY countdown. wait==0 means "not issued yet": the load
-        // must win the single access-issue slot before its latency starts.
         u32 wait = lsq_rp_.mem_wait[i].read();
         if (wait == 0) {
-            if (mem_start_used) continue;   // port busy this cycle, retry
+            if (mem_start_used) continue;
             mem_start_used = true;
-            wait = MEM_LATENCY;
+            if (memory_.hit(load_address, load_width)) {
+                cache_hit_++;  //only for test
+                u32 d = 0;
+                for (int b = 0; b < load_width; b++) {
+                    u32 byte = static_cast<u32>(memory_.byte(load_address + b));
+                    if (i != static_cast<int>(lh)) {
+                        int j = (i - 1 + LSQ_SIZE) % LSQ_SIZE;
+                        while (true) {
+                            if (lsq_rp_.valid[j].read() && !lsq_rp_.is_load[j].read()) {
+                                u32 store_addr = lsq_rp_.addr[j].read();
+                                u8 store_width = static_cast<u8>(lsq_rp_.width[j].read());
+                                if (store_addr <= load_address + b && load_address + b < store_addr + store_width) {
+                                    byte = (lsq_rp_.data[j].read() >> (8 * (load_address + b - store_addr))) & 0xFF;
+                                    break;
+                                }
+                            }
+                            if (j == static_cast<int>(lh)) break;
+                            j = (j - 1 + LSQ_SIZE) % LSQ_SIZE;
+                        }
+                    }
+                    d |= byte << (8 * b);
+                }
+                if (!lu && load_width < 4 && (d & (1u << (8 * load_width - 1)))) {
+                    d |= ~((1u << (8 * load_width)) - 1);
+                }
+                mem_lsq_.set_load_latch_req[i].write(1);
+                mem_lsq_.set_load_latch_val[i].write(d);
+                wait = MEM_LATENCY;
+            } else {
+                cache_miss_++;
+                mem_refill_.valid.write(1);
+                mem_refill_.addr.write(load_address);
+                continue;
+            }
         }
         wait--;
         if (wait > 0) {
@@ -346,39 +359,7 @@ void TomasuloTop::eval_memory() {
             continue;
         }
 
-        // Load completes: byte-merge from the youngest older store covering
-        // each byte, memory elsewhere, then sign-extend (hardware semantics).
-        u32 d = 0;
-        for (int b = 0; b < lw; b++) {
-            u32 byte = static_cast<u32>(mem_.buf[la + b]);
-            if (i != static_cast<int>(lh)) {
-                int j = (i - 1 + LSQ_SIZE) % LSQ_SIZE;
-                while (true) {
-                    if (lsq_rp_.valid[j].read() && !lsq_rp_.is_load[j].read()) {
-                        u32 sa = lsq_rp_.addr[j].read();
-                        u8 sw = static_cast<u8>(lsq_rp_.width[j].read());
-                        if (sa <= la + b && la + b < sa + sw) {
-                            byte = (lsq_rp_.data[j].read() >> (8 * (la + b - sa))) & 0xFF;
-                            break;
-                        }
-                    }
-                    if (j == static_cast<int>(lh)) break;
-                    j = (j - 1 + LSQ_SIZE) % LSQ_SIZE;
-                }
-            }
-            d |= byte << (8 * b);
-        }
-        if (!lu && lw < 4 && (d & (1u << (8 * lw - 1)))) {
-            d |= ~((1u << (8 * lw)) - 1);
-        }
-        // Single MEM CDB channel: at most one completion per cycle
-        // (oldest first — the traversal order). Losers hold at wait=1.
-        if (mem_cdb_used) {
-            mem_lsq_.set_mem_wait_req[i].write(1);
-            mem_lsq_.set_mem_wait_val[i].write(1);
-            continue;
-        }
-        mem_cdb_used = true;
+        u32 d = lsq_rp_.data[i].read();
         if (lprd != 0) {
             mem_cdb_.push_valid[0].write(1);
             mem_cdb_.push_prd[0].write(lprd);
@@ -497,7 +478,6 @@ void TomasuloTop::eval_execute() {
 
     if (best_i == -1) return;
 
-    // ---- execute the selected instruction ----
     u32 rs1 = 0, rs2 = 0, opcode = rs_rp_.opcode[best_i].read(), f3 = rs_rp_.ins_func3[best_i].read(),
         f7 = rs_rp_.ins_func7[best_i].read(), pc = rs_rp_.pc[best_i].read(), prd = rs_rp_.prd[best_i].read(),
         rbt = rs_rp_.rob_tag[best_i].read(), lst = rs_rp_.lsq_tag[best_i].read(), imm = rs_rp_.ins_imm[best_i].read();
@@ -655,7 +635,7 @@ void TomasuloTop::tick() {
 
     halt_req_.clear();exec_to_fetch_.clear();issue_to_fetch_.clear();bht_exec_.clear();
 
-    mem_wr_.clear();
+    mem_store_.clear(); mem_refill_.clear();
 
     // ---- Step 0: all storage modules drive read-port wires ----
     prf_.drive_read_ports(prf_rp_); ready_table_.drive_read_ports(rt_rp_);
@@ -663,7 +643,7 @@ void TomasuloTop::tick() {
     cdb_.drive_read_ports(cdb_rp_); rs_.drive_read_ports(rs_rp_);
     rob_.drive_read_ports(rob_rp_); lsq_.drive_read_ports(lsq_rp_);
     fetch_.drive_read_ports(fetch_rp_); bht_.drive_read_ports(bht_rp_);
-    ras_.drive_read_ports(ras_rp_);
+    ras_.drive_read_ports(ras_rp_); memory_.drive_read_ports(mem_rp_);
 
     // ---- Step 1: processing evals (read ports → write-port wires), ANY ORDER ----
     eval_commit(); eval_writeback(); eval_memory();
@@ -678,19 +658,10 @@ void TomasuloTop::tick() {
     rs_.eval(issue_rs_, exec_rs_);
     lsq_.eval(issue_lsq_, lsq_pnum_, exec_lsq_, mem_lsq_, commit_lsq_);
     cdb_.eval(exec_cdb_, mem_cdb_, wb_cdb_);
-    fetch_.eval(halt_req_, exec_to_fetch_, issue_to_fetch_, bht_rp_, ras_rp_, ras_fetch_, mem_);
+    fetch_.eval(halt_req_, exec_to_fetch_, issue_to_fetch_, bht_rp_, ras_rp_, ras_fetch_, memory_);
     bht_.eval(bht_exec_);
     ras_.eval(ras_fetch_, ras_restore_);
-
-    // ---- Store commit takes effect at the clock edge: the memory write
-    // driven this cycle by eval_commit is applied here, visible next cycle.
-    if (mem_wr_.valid.read()) {
-        u32 waddr = mem_wr_.addr.read(), wdata = mem_wr_.data.read();
-        u8 ww = static_cast<u8>(mem_wr_.width.read());
-        for (int b = 0; b < ww; b++) {
-            mem_.buf[waddr + b] = (wdata >> (8 * b)) & 0xFF;
-        }
-    }
+    memory_.eval(mem_store_, mem_refill_);
 
     // ---- x0 force ----
     prf_.force(0, 0); ready_table_.force(0, true);
@@ -698,7 +669,7 @@ void TomasuloTop::tick() {
     // ---- Step 3: tick all ----
     prf_.tick(); ready_table_.tick(); rat_.tick(); free_list_.tick();
     cdb_.tick(); rs_.tick(); rob_.tick(); lsq_.tick();
-    fetch_.tick(); bht_.tick(); ras_.tick();
+    fetch_.tick(); bht_.tick(); ras_.tick(); memory_.tick();
     flushing_.tick(); walk_ptr_.tick(); flush_end_.tick();
 }
 
@@ -719,4 +690,11 @@ void TomasuloTop::run() {
             flush_count_, jalr_mispredict_count_, flush_rs_stall_, flush_lsq_stall_, flush_rob_stall_, flush_fl_stall_);
     fprintf(stderr, "flush_win avg=%.1f max=%zu\n",
             flush_count_ ? static_cast<double>(flush_win_sum_) / flush_count_ : 0.0, flush_win_max_);
+    size_t ctotal = cache_hit_ + cache_miss_;
+    fprintf(stderr, "cache: hit=%zu miss=%zu hitrate=%.2f%% refills=%zu sb_stalls=%zu\n",
+            cache_hit_, cache_miss_,
+            ctotal ? 100.0 * static_cast<double>(cache_hit_) / ctotal : 0.0,
+            memory_.refill_count, cache_sb_stall_);
+    fprintf(stderr, "commit=%zu ipc=%.2f\n", commit_count_,
+            static_cast<double>(commit_count_) / clock_);
 }

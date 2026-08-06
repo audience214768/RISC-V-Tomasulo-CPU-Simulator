@@ -2,7 +2,6 @@
 #include "rtl/register.hpp"
 #include "ports/lsq_ports.hpp"
 #include "utils/config.hpp"
-#include <cstdio>
 #include <cstdlib>
 
 class LSQModule {

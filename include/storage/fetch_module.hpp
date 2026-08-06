@@ -3,11 +3,8 @@
 #include "ports/fetch_ports.hpp"
 #include "ports/bht_ports.hpp"
 #include "ports/ras_ports.hpp"
+#include "storage/memory_module.hpp"
 #include "utils/config.hpp"
-#include "utils/types.hpp"
-#include <cstring>
-#include <bit>
-#include <array>
 
 class FetchModule {
 public:
@@ -30,7 +27,7 @@ public:
         const BHTReadPorts &bht,
         const RASReadPorts &ras,
         const FetchRASWritePorts &ras_fetch,
-        const MemState &mem
+        const MemoryModule &mem
     );
 
     void tick() {
@@ -54,10 +51,8 @@ public:
     }
 
 private:
-    static u32 read_instruction(const MemState &mem, u32 addr) {
-        return std::bit_cast<u32>(
-            std::array<u8, 4>{mem.buf[addr], mem.buf[addr + 1],
-                              mem.buf[addr + 2], mem.buf[addr + 3]});
+    static u32 read_instruction(const MemoryModule &mem, u32 addr) {
+        return mem.fetch_word(addr);
     }
 
     Register<32> pc_;

@@ -12,7 +12,7 @@ void FetchModule::eval(
     const BHTReadPorts &bht,
     const RASReadPorts &ras,
     const FetchRASWritePorts &ras_fetch,
-    const MemState &mem
+    const MemoryModule &mem
 ) {
     pc_.hold();
     f2i_raw_.hold();
@@ -39,9 +39,6 @@ void FetchModule::eval(
         addr = pc_.cur();
     }
 
-    // ---- fetch-and-predict: one combinational block, also used on the
-    // redirect path. Prediction happens here (fetch stage), the predicted
-    // bits ride with the instruction through f2i and on to the RS entry.
     u32 raw = read_instruction(mem, addr);
     u32 opcode = raw & 0x7f;
     u32 rd = (raw >> 7) & 0x1f;

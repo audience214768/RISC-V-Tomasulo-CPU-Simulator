@@ -11,6 +11,7 @@
 #include "storage/fetch_module.hpp"
 #include "storage/bht_module.hpp"
 #include "storage/ras_module.hpp"
+#include "storage/memory_module.hpp"
 
 #include "ports/prf_ports.hpp"
 #include "ports/mem_ports.hpp"
@@ -65,6 +66,7 @@ private:
     FetchModule      fetch_;
     BHTModule        bht_;
     RASModule        ras_;
+    MemoryModule     memory_;
 
     // ---- read port wires ----
     PRFReadPorts        prf_rp_;
@@ -117,11 +119,10 @@ private:
     Register<32> walk_ptr_;
     Register<32> flush_end_;
 
-    // ---- memory write port (store commit, applied at the clock edge) ----
-    MemWritePorts mem_wr_;
-
-    // ---- external memory ----
-    MemState mem_;
+    // ---- memory module handshake ----
+    MemWritePorts          mem_store_;
+    MemReadPorts           mem_rp_;
+    MemRefillReqWritePorts mem_refill_;
 
     // ---- stats ----
     size_t clock_           = 0;
@@ -132,4 +133,6 @@ private:
     size_t flush_win_sum_    = 0;
     size_t flush_win_max_    = 0;
     size_t flush_rs_stall_ = 0, flush_lsq_stall_ = 0, flush_rob_stall_ = 0, flush_fl_stall_ = 0;
+    size_t cache_hit_ = 0, cache_miss_ = 0, cache_refill_count_ = 0, cache_sb_stall_ = 0;
+    size_t commit_count_ = 0;
 };

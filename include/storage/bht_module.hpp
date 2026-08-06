@@ -2,7 +2,6 @@
 #include "rtl/register.hpp"
 #include "ports/bht_ports.hpp"
 #include "utils/config.hpp"
-#include "utils/types.hpp"
 
 class BHTModule {
 public:

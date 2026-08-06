@@ -16,10 +16,6 @@ struct Instruction {
     u32 imm;
 };
 
-struct MemState {
-   u8 buf[BUF_SIZE];
-};
-
 
 
 
