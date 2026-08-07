@@ -186,10 +186,6 @@ void TomasuloTop::eval_flush() {
         flush_rob_.set_last_valid.write(1);
         flush_rob_.set_last_val.write(static_cast<u32>(fs));
 
-        // RAS restore from the branch's snapshot: the RAS head at the moment
-        // the branch was fetched is the pre-branch state. Restoring it undoes
-        // every predicted-path push/pop since (calls, rets and jr pops) in one
-        // shot — no window walk, no f2i inspection, correct at any flush depth.
         ras_restore_.restore_valid.write(1);
         ras_restore_.restore_head.write(rs_rp_.ras_snap[fd.sel].read());
 
@@ -215,13 +211,6 @@ void TomasuloTop::eval_flush() {
             }
         }
 
-        // A mispredict while a walk is in progress: extend the walker's end
-        // to the new window start instead of clobbering it. While flushing,
-        // issue is suppressed so ROB last is frozen at the old fs; the new
-        // branch is older (it executed during the walk, outside the window),
-        // so fs_new is ring-before fs_old and the new window [fs_new, fs_old)
-        // abuts — does not overlap — the old one. The walker just rolls back
-        // further; nothing is lost, no queue, no depth limit.
         if (flushing_.cur()) {
             flush_end_.write(static_cast<u32>(fs));
             return;
@@ -244,12 +233,6 @@ void TomasuloTop::eval_flush() {
     issue_rob_.suppressed.write(1);
     issue_to_fetch_.stall.write(1);
 
-    // Roll back one ROB entry: RAT restore, free-list push, ready clear.
-    // Newest-first order keeps the invariant "no preg is simultaneously in
-    // the free list and referenced by the RAT": the restored old value is a
-    // younger instruction's new (its holder is not rolled back yet, so the
-    // preg is still in use); the reclaimed new is the one that just left the
-    // RAT. No window scan is needed.
     u32 ptr = walk_ptr_.cur();
     u32 opcode = rob_rp_.opcode[ptr].read(), rd = rob_rp_.rd[ptr].read();
     u32 np = rob_rp_.new_pnum[ptr].read(), op = rob_rp_.old_pnum[ptr].read();
@@ -335,7 +318,6 @@ void TomasuloTop::eval_writeback() {
 
 void TomasuloTop::eval_memory() {
     // Blocking cache: while a line refill is in flight no load may access
-    // (the refill owns the single access slot).
     if (mem_rp_.refill_busy.read()) return;
 
     u32 lh = lsq_rp_.head.read();
@@ -445,14 +427,6 @@ void TomasuloTop::eval_issue() {
     auto ins = decode(raw);
     u32 pc = fetch_rp_.f2i_pc.read();
 
-    // TERMINATE_INST (li a0, 255, main's return path) is issued normally and
-    // only takes effect when COMMITTED (see eval_commit): a predicted-path
-    // fetch of it can never commit, so it can never spuriously halt the
-    // machine (an RAS misprediction fetching 0x8 used to halt here).
-    // TERMINATE_INST is treated as writing nothing: it must not rename a0
-    // (its new preg would never be written back, and the trailing `sb a0`
-    // and the final x10 read would wait on / see garbage). a0 keeps main's
-    // return value; the sentinel only marks program end when committed.
     bool wrf = (ins.opcode != 0x23 && ins.opcode != 0x63 && ins.opcode != 0x73 && ins.rd != 0)
                && raw != TERMINATE_INST;
     bool mmo = (ins.opcode == 0x3 || ins.opcode == 0x23);
@@ -676,7 +650,7 @@ void TomasuloTop::tick() {
     flush_fe_.hold();
 
     exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();ready_rob_.clear();
-
+    
     mem_lsq_.clear(); mem_cdb_.clear();
 
     wb_cdb_.clear();
@@ -685,7 +659,6 @@ void TomasuloTop::tick() {
 
     mem_store_.clear(); mem_refill_.clear();
 
-    // ---- Step 0: all storage modules drive read-port wires ----
     prf_.drive_read_ports(prf_rp_); ready_table_.drive_read_ports(rt_rp_);
     rat_.drive_read_ports(rat_rp_); free_list_.drive_read_ports(fl_rp_);
     cdb_.drive_read_ports(cdb_rp_); rs_.drive_read_ports(rs_rp_);
@@ -693,10 +666,9 @@ void TomasuloTop::tick() {
     fetch_.drive_read_ports(fetch_rp_); bht_.drive_read_ports(bht_rp_);
     ras_.drive_read_ports(ras_rp_); memory_.drive_read_ports(mem_rp_);
 
-    eval_issue(); eval_commit(); eval_writeback();
-    eval_flush(); eval_execute(); eval_memory();
+    
+    eval_flush(); eval_execute(); eval_memory();eval_issue(); eval_commit(); eval_writeback();
 
-    // ---- Step 2: all storage modules eval (write-port wires → Register.next) ----
     prf_.eval(wb_prf_);
     ready_table_.eval(wb_ready_, issue_ready_, flush_ready_);
     rat_.eval(issue_rat_, flush_rat_);
@@ -710,10 +682,8 @@ void TomasuloTop::tick() {
     ras_.eval(ras_fetch_, ras_restore_);
     memory_.eval(mem_store_, mem_refill_);
 
-    // ---- x0 force ----
     prf_.force(0, 0); ready_table_.force(0, true);
 
-    // ---- Step 3: tick all ----
     prf_.tick(); ready_table_.tick(); rat_.tick(); free_list_.tick();
     cdb_.tick(); rs_.tick(); rob_.tick(); lsq_.tick();
     fetch_.tick(); bht_.tick(); ras_.tick(); memory_.tick();

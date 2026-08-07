@@ -70,12 +70,6 @@ void FetchModule::eval(
                 ras_fetch.pop_valid.write(1);
             }
         } else if (rd == 0) {
-            // jr-style return through a saved register (soft mul/div routines
-            // use `mv t0,ra; ...; jr t0`): pop to keep the RAS balanced — the
-            // call's push would otherwise leak and the head drifts to full,
-            // breaking every later ret prediction. The target is
-            // data-dependent, so predict not-taken; a taken branch is
-            // corrected by the normal mispredict flush.
             if (!ras.empty.read()) {
                 ras_fetch.pop_valid.write(1);
             }
@@ -92,10 +86,6 @@ void FetchModule::eval(
     f2i_valid_.write(1);
     f2i_pred_.write(pred_taken);
     f2i_pred_target_.write(pred_target);
-    // RAS snapshot: taken at the moment a branch/JALR is fetched — the RAS
-    // head then is the pre-branch state. On mispredict the branch unit
-    // restores it, undoing every predicted-path push/pop since (no window
-    // walk, no f2i inspection needed).
     f2i_ras_snap_.write((opcode == 0x63 || opcode == 0x67) ? ras.head.read() : 0);
     pc_.write(pred_taken ? pred_target : addr + 4);
 }

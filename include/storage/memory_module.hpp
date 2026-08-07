@@ -6,42 +6,6 @@
 #include <bit>
 #include <array>
 
-// The whole memory hierarchy as one module: a direct-mapped, write-back,
-// write-allocate, blocking (at most one refill in flight) D-cache in front
-// of the main memory array buf_ (DCACHE_LINES x DCACHE_LINE bytes).
-// Address split: [tag | index | offset], index = addr[12:5], tag = addr[31:13]
-// (geometry is derived from DCACHE_SIZE/DCACHE_LINE only — independent of
-// the memory size BUF_SIZE; only the 32-bit address width matters).
-//
-// Timing discipline (kept identical to the rest of the design):
-//   - buf_ is the main memory array. Its only write points are
-//     initialization (constructor / write_init) and tick() — the
-//     dirty-victim write-back is applied there, at the clock edge after
-//     all module evals, so it cannot race fetch's combinational read and
-//     module eval order stays interchangeable (every reader in step 1/2
-//     sees the previous edge's buf_);
-//   - a refill reads its line from buf_ at COMPLETION time, never at
-//     request time — a store committed meanwhile must not be clobbered;
-//   - the CPU reads through combinational methods only: hit/byte/fetch_word
-//     (BHT-style direct reads of cur_ state, invoked from eval_memory /
-//     fetch's eval; they never mutate anything).
-//
-// eval() internal order (deterministic within the module; R2/R4 from the
-// design review):
-//   1. store commit: hit -> merge bytes into line(s), dirty=1;
-//      miss -> push into the store miss buffer (compact ring, slots [0,count))
-//   2. load-miss refill request (only when idle): start refill, evict the
-//      victim (dirty victim -> write-back pending, R2: captures post-merge
-//      data from next_)
-//   3. refill countdown; on completion: fill the line from buf_, then scan
-//      the buffer for entries covering this line (R3: full line match) and
-//      merge them, clearing only entries whose every covering line is valid;
-//      R4: the scan runs after step 1 pushes
-//   4. drain the buffer (only when idle): oldest entry hits -> merge+clear,
-//      else start a refill for its first missing line (entry stays; the
-//      completion scan of step 3 merges it)
-//   then compaction shifts valid entries back to [0,count), preserving age
-//   order (age order == merge order, so byte precedence stays correct).
 class MemoryModule {
     struct Line {
         Register<1> valid, dirty;
@@ -107,8 +71,6 @@ public:
                               buf_[addr + 2], buf_[addr + 3]});
     }
 
-    // Initialization only (program load from the harness); buf_ must not be
-    // written while the simulator runs.
     void write_init(u32 addr, u8 val) { buf_[addr] = val; }
 
     void drive_read_ports(MemReadPorts &p) const {
@@ -119,9 +81,6 @@ public:
     void eval(const MemWritePorts &store, const MemRefillReqWritePorts &req);
 
     void tick() {
-        // Dirty-victim write-back takes effect at the clock edge (after all
-        // module evals), so it is visible next cycle and cannot race fetch's
-        // combinational read.
         if (wb_pending_) {
             for (int k = 0; k < DCACHE_LINE / 4; k++) {
                 u32 wd = wb_data_[k];
@@ -151,10 +110,5 @@ private:
     bool line_hit(size_t idx, u32 tag) const {
         return lines_[idx].valid.cur() && lines_[idx].tag.cur() == tag;
     }
-    // Starts a refill for the line containing `addr`: evicts the victim
-    // (dirty -> write-back pending, data captured from next_ so a store
-    // merged earlier in this eval is included, R2), marks the line invalid
-    // (R1: stores to it are treated as misses until the refill lands),
-    // latches the target and arms the countdown.
     void start_refill(u32 addr);
 };
