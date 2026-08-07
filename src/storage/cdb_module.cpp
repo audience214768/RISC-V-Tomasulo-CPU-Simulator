@@ -21,8 +21,6 @@ void CDBModule::eval(
     // Push: Execute (up to 4) + Memory (up to LSQ_SIZE)
     auto do_push = [&](u32 prd, u32 result, u32 rob_tag) {
         for (int i = 0; i < CDB_SIZE; i++) {
-            // Check next_raw() only: Clear (higher priority) sets next_raw=0
-            // on previously-valid slots, making them available same-cycle.
             if (entries_[i].valid.next_raw() == 0) {
                 entries_[i].valid.next_raw() = 1;
                 entries_[i].prd.next_raw() = prd;

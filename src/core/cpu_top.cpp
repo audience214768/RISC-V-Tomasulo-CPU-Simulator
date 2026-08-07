@@ -122,66 +122,118 @@ static bool fetch_op_wire(const CDBReadPorts &cdb, const ReadyTableReadPorts &rt
     return false;
 }
 
-void TomasuloTop::flush_pipeline(size_t branch_rob_tag) {
-    size_t fs = (branch_rob_tag + 1) % ROB_SIZE;
-    size_t fe = rob_rp_.last.read();
-
-    issue_lsq_.suppressed.write(1);
-    issue_rs_.suppressed.write(1);
-    issue_fl_.suppressed.write(1);
-    issue_rat_.suppressed.write(1);
-    issue_ready_.suppressed.write(1);
-    issue_rob_.suppressed.write(1);
-    flush_rob_.set_last_valid.write(1);
-    flush_rob_.set_last_val.write(static_cast<u32>(fs));
-
-    if (fs == fe) {
-        return;
-    }
-
-    flushing_.write(1);
-    walk_ptr_.write(static_cast<u32>((fe + ROB_SIZE - 1) % ROB_SIZE));
-    flush_end_.write(static_cast<u32>(fs));
-
-    // Undo the flushed window's fetch-stage RAS ops in one combinational
-    // step: calls are popped back, returns are re-pushed — both only move
-    // the head (the stack contents stay), so restoring the head pointer
-    // suffices. Done here (cycle 0) so it cannot race with the walker.
-    u32 rhead = ras_rp_.head.read();
-    size_t curr = (fe + ROB_SIZE - 1) % ROB_SIZE;
-    while (curr != branch_rob_tag) {
-        u32 opcode = rob_rp_.opcode[curr].read(), rd = rob_rp_.rd[curr].read();
-        if ((opcode == 0x6F || opcode == 0x67) && rd == 1) {
-            if (rhead > 0) rhead--;
-        } else if (opcode == 0x67 && rd == 0 && ((rob_rp_.ins_raw[curr].read() >> 15) & 0x1F) == 1) {
-            if (rhead < RAS_SIZE) rhead++;
-        }
-        if (curr == fs) break;
-        curr = (curr + ROB_SIZE - 1) % ROB_SIZE;
-    }
-    ras_restore_.restore_valid.write(1);
-    ras_restore_.restore_head.write(rhead);
-
-    auto in_range = [&](size_t tag) -> bool {
-        if (fs <= fe) {
-            return tag >= fs && tag < fe;
-        } else {
-            return tag >= fs || tag < fe;
-        }
-    };
+int TomasuloTop::select_ready_rs() const {
+    int  best_i   = -1;
+    u32  best_age = static_cast<u32>(SIZE_MAX);
     for (int i = 0; i < RS_SIZE; i++) {
-        if (rs_rp_.valid[i].read() && in_range(rs_rp_.rob_tag[i].read())) {
-            exec_rs_.flush_mask[i].write(1);
+        if (!rs_rp_.valid[i].read()) continue;
+        u32 age = (rs_rp_.rob_tag[i].read() - rob_rp_.head.read() + ROB_SIZE) % ROB_SIZE;
+        u32 tmp;
+        bool r1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
+        bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
+        if (!r1 || !r2) continue;
+        if (age < best_age) {
+            best_i   = i;
+            best_age = age;
         }
     }
-    for (int i = 0; i < LSQ_SIZE; i++) {
-        if (lsq_rp_.valid[i].read() && in_range(lsq_rp_.rob_tag[i].read())) {
-            exec_lsq_.flush_mask[i].write(1);
+    return best_i;
+}
+
+TomasuloTop::FlushDetect TomasuloTop::detect_flush() const {
+    FlushDetect fd;
+    fd.sel = select_ready_rs();
+    if (fd.sel == -1) return fd;
+    u32 opcode = rs_rp_.opcode[fd.sel].read();
+    if (opcode != 0x63 && opcode != 0x67) return fd;
+    fd.rbt = rs_rp_.rob_tag[fd.sel].read();
+    u32 rs1 = 0, rs2 = 0;
+    fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[fd.sel].read(), rs1);
+    fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[fd.sel].read(), rs2);
+    u32 f3 = rs_rp_.ins_func3[fd.sel].read();
+    u32 pc = rs_rp_.pc[fd.sel].read();
+    u32 imm = rs_rp_.ins_imm[fd.sel].read();
+    bool pred = rs_rp_.pred_taken[fd.sel].read() != 0;
+    if (opcode == 0x63) {
+        bool taken = branch_cond(f3, rs1, rs2);
+        if (taken != pred) {
+            fd.mispredict = true;
+            fd.correct_pc = taken ? pc + imm : pc + 4;
+        }
+    } else {   
+        u32 t = (rs1 + imm) & ~1u;
+        u32 pt = pred ? rs_rp_.pred_target[fd.sel].read() : pc + 4;
+        if (t != pt) {
+            fd.mispredict = true;
+            fd.correct_pc = t;
         }
     }
+    return fd;
 }
 
 void TomasuloTop::eval_flush() {
+    FlushDetect fd = detect_flush();
+    if (fd.mispredict) {
+        size_t fs = (fd.rbt + 1) % ROB_SIZE;
+        size_t fe = rob_rp_.last.read();
+
+        issue_lsq_.suppressed.write(1);
+        issue_rs_.suppressed.write(1);
+        issue_fl_.suppressed.write(1);
+        issue_rat_.suppressed.write(1);
+        issue_ready_.suppressed.write(1);
+        issue_rob_.suppressed.write(1);
+        flush_rob_.set_last_valid.write(1);
+        flush_rob_.set_last_val.write(static_cast<u32>(fs));
+
+        // RAS restore from the branch's snapshot: the RAS head at the moment
+        // the branch was fetched is the pre-branch state. Restoring it undoes
+        // every predicted-path push/pop since (calls, rets and jr pops) in one
+        // shot — no window walk, no f2i inspection, correct at any flush depth.
+        ras_restore_.restore_valid.write(1);
+        ras_restore_.restore_head.write(rs_rp_.ras_snap[fd.sel].read());
+
+        if (fs == fe) {
+            return;   // empty window: suppress + RAS restore only, no walk
+        }
+
+        auto in_range = [&](size_t tag) -> bool {
+            if (fs <= fe) {
+                return tag >= fs && tag < fe;
+            } else {
+                return tag >= fs || tag < fe;
+            }
+        };
+        for (int i = 0; i < RS_SIZE; i++) {
+            if (rs_rp_.valid[i].read() && in_range(rs_rp_.rob_tag[i].read())) {
+                exec_rs_.flush_mask[i].write(1);
+            }
+        }
+        for (int i = 0; i < LSQ_SIZE; i++) {
+            if (lsq_rp_.valid[i].read() && in_range(lsq_rp_.rob_tag[i].read())) {
+                exec_lsq_.flush_mask[i].write(1);
+            }
+        }
+
+        // A mispredict while a walk is in progress: extend the walker's end
+        // to the new window start instead of clobbering it. While flushing,
+        // issue is suppressed so ROB last is frozen at the old fs; the new
+        // branch is older (it executed during the walk, outside the window),
+        // so fs_new is ring-before fs_old and the new window [fs_new, fs_old)
+        // abuts — does not overlap — the old one. The walker just rolls back
+        // further; nothing is lost, no queue, no depth limit.
+        if (flushing_.cur()) {
+            flush_end_.write(static_cast<u32>(fs));
+            return;
+        }
+
+        flushing_.write(1);
+        walk_ptr_.write(static_cast<u32>((fe + ROB_SIZE - 1) % ROB_SIZE));
+        flush_end_.write(static_cast<u32>(fs));
+        flush_fe_.write(static_cast<u32>(fe));
+        return;
+    }
+
     if (!flushing_.cur()) return;
 
     issue_lsq_.suppressed.write(1);
@@ -193,6 +245,11 @@ void TomasuloTop::eval_flush() {
     issue_to_fetch_.stall.write(1);
 
     // Roll back one ROB entry: RAT restore, free-list push, ready clear.
+    // Newest-first order keeps the invariant "no preg is simultaneously in
+    // the free list and referenced by the RAT": the restored old value is a
+    // younger instruction's new (its holder is not rolled back yet, so the
+    // preg is still in use); the reclaimed new is the one that just left the
+    // RAT. No window scan is needed.
     u32 ptr = walk_ptr_.cur();
     u32 opcode = rob_rp_.opcode[ptr].read(), rd = rob_rp_.rd[ptr].read();
     u32 np = rob_rp_.new_pnum[ptr].read(), op = rob_rp_.old_pnum[ptr].read();
@@ -236,6 +293,9 @@ void TomasuloTop::eval_commit() {
                 mem_store_.data.write(lsq_rp_.data[lt].read());
                 mem_store_.width.write(lsq_rp_.width[lt].read());
                 commit_lsq_.invalidate_req[lt].write(1);
+            }
+            if (rob_rp_.ins_raw[head].read() == TERMINATE_INST) {
+                halt_req_.req.write(1);   // program end only on commit
             }
             commit_count_++;
             head = (head + 1) % ROB_SIZE;
@@ -384,12 +444,17 @@ void TomasuloTop::eval_issue() {
 
     auto ins = decode(raw);
     u32 pc = fetch_rp_.f2i_pc.read();
-    if (raw == TERMINATE_INST) {
-        halt_req_.req.write(1);
-        return;
-    }
 
-    bool wrf = (ins.opcode != 0x23 && ins.opcode != 0x63 && ins.opcode != 0x73 && ins.rd != 0);
+    // TERMINATE_INST (li a0, 255, main's return path) is issued normally and
+    // only takes effect when COMMITTED (see eval_commit): a predicted-path
+    // fetch of it can never commit, so it can never spuriously halt the
+    // machine (an RAS misprediction fetching 0x8 used to halt here).
+    // TERMINATE_INST is treated as writing nothing: it must not rename a0
+    // (its new preg would never be written back, and the trailing `sb a0`
+    // and the final x10 read would wait on / see garbage). a0 keeps main's
+    // return value; the sentinel only marks program end when committed.
+    bool wrf = (ins.opcode != 0x23 && ins.opcode != 0x63 && ins.opcode != 0x73 && ins.rd != 0)
+               && raw != TERMINATE_INST;
     bool mmo = (ins.opcode == 0x3 || ins.opcode == 0x23);
 
     if (rob_rp_.full.read() || rs_rp_.full.read() || wrf && fl_rp_.empty.read() || mmo && lsq_rp_.full.read()) {
@@ -404,19 +469,21 @@ void TomasuloTop::eval_issue() {
     // LSQ push
     u32 lsq_tag = 0;
     if (mmo) {
-      u32 ppd = (ins.opcode == 0x23) ? rat_rp_.map[ins.rs2].read() : 0;
-      issue_lsq_.push_valid.write(1);
-      issue_lsq_.push_is_load.write(ins.opcode == 0x3 ? 1 : 0);
-      issue_lsq_.push_rob_tag.write(rob_rp_.last.read());
-      issue_lsq_.push_prs2_or_prd.write(ppd);
-      u8 w = 4;
-      if (ins.func3 == 0x0 || ins.func3 == 0x4)
-        w = 1;
-      else if (ins.func3 == 0x1 || ins.func3 == 0x5)
-        w = 2;
-      issue_lsq_.push_width.write(w);
-      issue_lsq_.push_is_unsigned.write(ins.func3 >= 4 ? 1 : 0);
-      lsq_tag = lsq_rp_.last.read();
+        u32 ppd = (ins.opcode == 0x23) ? rat_rp_.map[ins.rs2].read() : 0;
+        issue_lsq_.push_valid.write(1);
+        issue_lsq_.push_is_load.write(ins.opcode == 0x3 ? 1 : 0);
+        issue_lsq_.push_rob_tag.write(rob_rp_.last.read());
+        issue_lsq_.push_prs2_or_prd.write(ppd);
+        u8 w = 4;
+        if (ins.func3 == 0x0 || ins.func3 == 0x4) {
+            w = 1;
+        }
+        else if (ins.func3 == 0x1 || ins.func3 == 0x5) {
+            w = 2;
+        }
+        issue_lsq_.push_width.write(w);
+        issue_lsq_.push_is_unsigned.write(ins.func3 >= 4 ? 1 : 0);
+        lsq_tag = lsq_rp_.last.read();
     }
 
     u32 prs1 = rat_rp_.map[ins.rs1].read(), prs2 = rat_rp_.map[ins.rs2].read();
@@ -448,6 +515,7 @@ void TomasuloTop::eval_issue() {
     // Prediction made at fetch rides with the instruction into the RS entry
     issue_rs_.push_pred_taken.write(fetch_rp_.f2i_pred.read());
     issue_rs_.push_pred_target.write(fetch_rp_.f2i_pred_target.read());
+    issue_rs_.push_ras_snap.write(fetch_rp_.f2i_ras_snap.read());
 
     // ROB push
     issue_rob_.push_valid.write(1); issue_rob_.push_opcode.write(ins.opcode);
@@ -456,26 +524,7 @@ void TomasuloTop::eval_issue() {
 }
 
 void TomasuloTop::eval_execute() {
-    int  best_i   = -1;
-    u32  best_age = static_cast<u32>(SIZE_MAX);
-
-    for (int i = 0; i < RS_SIZE; i++) {
-        if (!rs_rp_.valid[i].read()) continue;
-
-        u32 age = (rs_rp_.rob_tag[i].read() - rob_rp_.head.read() + ROB_SIZE) % ROB_SIZE;
-        u32 tmp;
-        bool r1 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[i].read(), tmp);
-        bool r2 = fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[i].read(), tmp);
-
-        if (!r1 || !r2) continue;
-
-        // oldest-first selection
-        if (age < best_age) {
-            best_i   = i;
-            best_age = age;
-        }
-    }
-
+    int best_i = select_ready_rs();
     if (best_i == -1) return;
 
     u32 rs1 = 0, rs2 = 0, opcode = rs_rp_.opcode[best_i].read(), f3 = rs_rp_.ins_func3[best_i].read(),
@@ -484,9 +533,15 @@ void TomasuloTop::eval_execute() {
     fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs1[best_i].read(), rs1);
     fetch_op_wire(cdb_rp_, rt_rp_, prf_rp_, rs_rp_.prs2[best_i].read(), rs2);
 
+    FlushDetect fd = detect_flush();
+
     u32 res = 0;
     bool wcdb = true;
     bool done = true;
+    if (rs_rp_.ins_raw[best_i].read() == TERMINATE_INST) {
+        wcdb = false;
+        ready_rob_.set_ready_req[rbt].write(1);
+    } else {
     switch (opcode) {
         case 0x33:
             res = ALU_R(f3, f7, rs1, rs2);
@@ -528,18 +583,15 @@ void TomasuloTop::eval_execute() {
             branch_count_++;
             bool taken = branch_cond(f3, rs1, rs2);
             size_t bht_idx = (pc >> 2) % BHT_SIZE;
-            bool pred = rs_rp_.pred_taken[best_i].read() != 0;
 
-            if (taken != pred) {
+            if (fd.mispredict) {
                 mispredict_count_++;
                 flush_count_++;
                 flush_win_sum_ += (rob_rp_.last.read() + ROB_SIZE - rbt - 1) % ROB_SIZE;
                 flush_win_max_ = std::max(flush_win_max_, (rob_rp_.last.read() + ROB_SIZE - rbt - 1) % ROB_SIZE);
                 exec_to_fetch_.mispredict.write(1);
-                exec_to_fetch_.correct_pc.write(taken ? pc + imm : pc + 4);
-                flush_pipeline(rbt);
+                exec_to_fetch_.correct_pc.write(fd.correct_pc);
             }
-            // update 2-bit saturating counter (via BHT module write ports)
             bht_exec_.update_req.write(1);
             bht_exec_.update_idx.write(static_cast<u32>(bht_idx));
             bht_exec_.update_taken.write(taken ? 1 : 0);
@@ -552,17 +604,11 @@ void TomasuloTop::eval_execute() {
             res = pc + 4;
             break;
         case 0x67: {
-            // JALR: flush only when the actual target differs from the
-            // fetch-stage prediction (RAS top for rets, pc+4 otherwise).
-            u32 t = (rs1 + imm) & ~1u;
             res = pc + 4;
-            bool pred = rs_rp_.pred_taken[best_i].read() != 0;
-            u32 pt = pred ? rs_rp_.pred_target[best_i].read() : pc + 4;
-            if (t != pt) {
+            if (fd.mispredict) {
                 jalr_mispredict_count_++;
                 exec_to_fetch_.mispredict.write(1);
-                exec_to_fetch_.correct_pc.write(t);
-                flush_pipeline(rbt);
+                exec_to_fetch_.correct_pc.write(fd.correct_pc);
             }
             break;
         }
@@ -596,6 +642,7 @@ void TomasuloTop::eval_execute() {
             fprintf(stderr, "unknown op:0x%x pc=0x%x\n", opcode, pc);
             exit(1);
     }
+    }
     if (wcdb) {
         exec_cdb_.push_valid[0].write(1);
         exec_cdb_.push_prd[0].write(prd);
@@ -626,6 +673,7 @@ void TomasuloTop::tick() {
     flushing_.hold();
     walk_ptr_.hold();
     flush_end_.hold();
+    flush_fe_.hold();
 
     exec_rs_.clear(); exec_lsq_.clear(); exec_cdb_.clear();ready_rob_.clear();
 
@@ -645,9 +693,8 @@ void TomasuloTop::tick() {
     fetch_.drive_read_ports(fetch_rp_); bht_.drive_read_ports(bht_rp_);
     ras_.drive_read_ports(ras_rp_); memory_.drive_read_ports(mem_rp_);
 
-    // ---- Step 1: processing evals (read ports → write-port wires), ANY ORDER ----
-    eval_commit(); eval_writeback(); eval_memory();
-    eval_issue(); eval_execute(); eval_flush();
+    eval_issue(); eval_commit(); eval_writeback();
+    eval_flush(); eval_execute(); eval_memory();
 
     // ---- Step 2: all storage modules eval (write-port wires → Register.next) ----
     prf_.eval(wb_prf_);
@@ -670,7 +717,7 @@ void TomasuloTop::tick() {
     prf_.tick(); ready_table_.tick(); rat_.tick(); free_list_.tick();
     cdb_.tick(); rs_.tick(); rob_.tick(); lsq_.tick();
     fetch_.tick(); bht_.tick(); ras_.tick(); memory_.tick();
-    flushing_.tick(); walk_ptr_.tick(); flush_end_.tick();
+    flushing_.tick(); walk_ptr_.tick(); flush_end_.tick(); flush_fe_.tick();
 }
 
 void TomasuloTop::run() {

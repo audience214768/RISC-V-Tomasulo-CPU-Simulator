@@ -15,6 +15,12 @@ void ROBModule::eval(
     // P1 (highest): Flush — resets last, overrides everything below
     if (flush.set_last_valid.read()) {
         last_.next_raw() = flush.set_last_val.read();
+        u32 fs = flush.set_last_val.read();
+        u32 wlen = (last_.cur() + ROB_SIZE - fs) % ROB_SIZE;
+        u32 hoff = (head_.cur() + ROB_SIZE - fs) % ROB_SIZE;
+        if (hoff < wlen) {
+            head_.next_raw() = fs;
+        }
     }
     // P2: Commit — sets head
     if (commit.set_head_valid.read()) {

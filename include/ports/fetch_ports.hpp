@@ -9,6 +9,7 @@ struct FetchReadPorts {
     Wire<1>  f2i_valid;
     Wire<1>  f2i_pred;        // prediction made at fetch, rides with the inst
     Wire<32> f2i_pred_target; // JALR return target (RAS top); else unused
+    Wire<32> f2i_ras_snap;    // RAS head at branch fetch (restored on mispredict)
     Wire<1>  halt;
 };
 

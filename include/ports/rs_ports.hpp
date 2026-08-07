@@ -8,9 +8,10 @@ struct RSReadPorts {
     Wire<3> ins_func3[RS_SIZE];
     Wire<7> ins_func7[RS_SIZE];
     Wire<32> prs1[RS_SIZE], prs2[RS_SIZE], prd[RS_SIZE], pc[RS_SIZE];
-    Wire<32> rob_tag[RS_SIZE], lsq_tag[RS_SIZE], ins_imm[RS_SIZE];
+    Wire<32> rob_tag[RS_SIZE], lsq_tag[RS_SIZE], ins_imm[RS_SIZE], ins_raw[RS_SIZE];
     Wire<1> pred_taken[RS_SIZE];
     Wire<32> pred_target[RS_SIZE];
+    Wire<32> ras_snap[RS_SIZE];
 };
 
 struct IssueRSWritePorts {
@@ -21,6 +22,7 @@ struct IssueRSWritePorts {
     Wire<32> push_prs1, push_prs2, push_prd, push_pc, push_rob_tag, push_lsq_tag, push_ins_raw, push_ins_imm;
     Wire<1> push_pred_taken;
     Wire<32> push_pred_target;
+    Wire<32> push_ras_snap;
     Wire<1> suppressed;
     void clear(){
         push_valid.write(0);

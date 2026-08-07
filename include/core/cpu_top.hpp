@@ -50,8 +50,22 @@ private:
     static auto ALU_R(u32 f3, u32 f7, u32 r1, u32 r2) -> u32;
     static auto ALU_I(u32 f3, u32 f7, u32 r1, u32 imm) -> u32;
     static auto branch_cond(u32 f3, u32 r1, u32 r2) -> bool;
-    void flush_pipeline(size_t branch_rob_tag);
+
+    // ---- branch execution unit: eval_flush detects mispredicts itself
+    // (select_ready_rs/detect_flush are pure combinational reads of read
+    // ports / cur_ state, shared with eval_execute), so the two units are
+    // independent combinational blocks and step 1 stays order-free. The
+    // walker state (flushing_/walk_ptr_/flush_end_) is written only here. ----
+    struct FlushDetect {
+        int sel = -1;
+        bool mispredict = false;
+        u32 correct_pc = 0;
+        u32 rbt = 0;
+    };
+
     void eval_flush();
+    int select_ready_rs() const;
+    FlushDetect detect_flush() const;
     void load_memory();
 
     // ---- storage modules ----
@@ -117,7 +131,8 @@ private:
     // ---- flush walker state (multi-cycle ROB rollback) ----
     Register<1>  flushing_;
     Register<32> walk_ptr_;
-    Register<32> flush_end_;
+    Register<32> flush_end_;   // fs (window start; extended on nested flush)
+    Register<32> flush_fe_;    // fe (window end, saved at flush time)
 
     // ---- memory module handshake ----
     MemWritePorts          mem_store_;

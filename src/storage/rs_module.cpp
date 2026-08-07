@@ -45,5 +45,6 @@ void RSModule::eval(
         e.prd.next_raw() = issue.push_prd.read(); e.pc.next_raw() = issue.push_pc.read();
         e.pred_taken.next_raw() = issue.push_pred_taken.read();
         e.pred_target.next_raw() = issue.push_pred_target.read();
+        e.ras_snap.next_raw() = issue.push_ras_snap.read();
     }
 }

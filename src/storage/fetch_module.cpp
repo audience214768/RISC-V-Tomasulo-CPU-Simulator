@@ -5,6 +5,8 @@ static u32 sign_extend(u32 v, u8 b) {
     return v & ((1u << b) - 1);
 }
 
+static const bool RAS_ENABLED = true;
+
 void FetchModule::eval(
     const HaltRequestWritePorts &halt_req,
     const ExecToFetchWritePorts &exec,
@@ -29,7 +31,6 @@ void FetchModule::eval(
         return;
     }
 
-    // Redirect (mispredict) wins over everything; otherwise stall holds f2i.
     u32 addr;
     if (exec.mispredict.read()) {
         addr = exec.correct_pc.read();
@@ -49,7 +50,6 @@ void FetchModule::eval(
     u32 pred_target = 0;
 
     if (opcode == 0x63) {
-        // conditional branch: BHT 2-bit counter, >= 2 means taken
         u32 imm = sign_extend(((raw >> 19) & 0x1000) | ((raw << 4) & 0x800) |
                               ((raw >> 20) & 0x7E0) | ((raw >> 7) & 0x1E), 13);
         if (bht.counters[(addr >> 2) % BHT_SIZE].read() >= 2) {
@@ -57,24 +57,31 @@ void FetchModule::eval(
             pred_target = addr + imm;
         }
     } else if (opcode == 0x6F) {
-        // JAL: always taken, static target
         u32 imm = sign_extend(((raw >> 11) & 0x100000) | (raw & 0xFF000) |
                               ((raw >> 9) & 0x800) | ((raw >> 20) & 0x7FE), 21);
         pred_taken = 1;
         pred_target = addr + imm;
     } else if (opcode == 0x67) {
-        // JALR: ret (rd==0, rs1==1) predicts taken to the RAS top;
-        // other JALRs (calls / indirect jumps) predict not-taken.
         if (rd == 0 && rs1 == 1) {
-            if (!ras.empty.read()) {
+            // ret: predict taken to the RAS top, pop
+            if (!ras.empty.read() && RAS_ENABLED) {
                 pred_taken = 1;
                 pred_target = ras.top.read();
+                ras_fetch.pop_valid.write(1);
+            }
+        } else if (rd == 0) {
+            // jr-style return through a saved register (soft mul/div routines
+            // use `mv t0,ra; ...; jr t0`): pop to keep the RAS balanced — the
+            // call's push would otherwise leak and the head drifts to full,
+            // breaking every later ret prediction. The target is
+            // data-dependent, so predict not-taken; a taken branch is
+            // corrected by the normal mispredict flush.
+            if (!ras.empty.read()) {
                 ras_fetch.pop_valid.write(1);
             }
         }
     }
 
-    // call pattern (jal/jalr with rd == x1): push the return address
     if ((opcode == 0x6F || opcode == 0x67) && rd == 1) {
         ras_fetch.push_valid.write(1);
         ras_fetch.push_val.write(addr + 4);
@@ -85,5 +92,10 @@ void FetchModule::eval(
     f2i_valid_.write(1);
     f2i_pred_.write(pred_taken);
     f2i_pred_target_.write(pred_target);
+    // RAS snapshot: taken at the moment a branch/JALR is fetched — the RAS
+    // head then is the pre-branch state. On mispredict the branch unit
+    // restores it, undoing every predicted-path push/pop since (no window
+    // walk, no f2i inspection needed).
+    f2i_ras_snap_.write((opcode == 0x63 || opcode == 0x67) ? ras.head.read() : 0);
     pc_.write(pred_taken ? pred_target : addr + 4);
 }

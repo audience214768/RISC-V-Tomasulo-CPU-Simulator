@@ -2,9 +2,9 @@
 #include "rtl/wire.hpp"
 #include "utils/config.hpp"
 
-struct FreeListReadPorts { 
-    Wire<1> empty; 
-    Wire<32> head_val; 
+struct FreeListReadPorts {
+    Wire<1> empty;
+    Wire<32> head_val;
 };
 
 struct IssueFLWritePorts  {

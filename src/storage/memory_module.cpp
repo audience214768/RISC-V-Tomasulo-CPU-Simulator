@@ -54,8 +54,6 @@ void MemoryModule::eval(const MemWritePorts &store, const MemRefillReqWritePorts
             store_buffer_count_.next_raw() = store_buffer_count_.cur() + 1;
             pushed = true;
         }
-        // buffer full + miss cannot happen (eval_commit backpressures on
-        // sb_full before driving the port); drop defensively.
     }
 
     // ---- Step 2: load-miss refill request (idle only) ----
@@ -118,8 +116,6 @@ void MemoryModule::eval(const MemWritePorts &store, const MemRefillReqWritePorts
             }
             store_buffer_[0].valid.next_raw() = 0;
         } else {
-            // miss: start a refill for the entry's first missing covering
-            // line (the entry stays; the completion scan of step 3 merges it)
             u32 target = 0;
             for (int b = 0; b < ewidth; b++) {
                 u32 a = eaddr + b;
@@ -132,8 +128,6 @@ void MemoryModule::eval(const MemWritePorts &store, const MemRefillReqWritePorts
         }
     }
 
-    // ---- Compaction: shift valid entries to [0,count), preserving age
-    // order (age order == merge order, so byte precedence stays correct) ----
     u32 ncount = store_buffer_count_.cur() + (pushed ? 1 : 0);
     u32 nc = 0;
     for (int e = 0; e < (int)ncount; e++) {

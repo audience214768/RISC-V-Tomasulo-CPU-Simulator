@@ -2,7 +2,6 @@
 #include "rtl/register.hpp"
 #include "ports/mem_ports.hpp"
 #include "utils/config.hpp"
-#include "utils/types.hpp"
 #include <cstring>
 #include <bit>
 #include <array>
@@ -77,9 +76,6 @@ class MemoryModule {
     Register<8> refill_state_;   // 0 = idle, 1 = completes this cycle, else countdown
     Register<32> refill_addr_;   // line base of the refill target
 
-    // Dirty-victim write-back pending: captured in eval (from next_, so a
-    // store merged into the victim in the same cycle is included, R2),
-    // applied into buf_ in tick() at the clock edge.
     bool wb_pending_ = false;
     u32 wb_addr_ = 0;
     u32 wb_data_[DCACHE_LINE / 4] = {};

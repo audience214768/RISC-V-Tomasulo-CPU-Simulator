@@ -17,6 +17,7 @@ public:
         p.f2i_valid.write(f2i_valid_.cur());
         p.f2i_pred.write(f2i_pred_.cur());
         p.f2i_pred_target.write(f2i_pred_target_.cur());
+        p.f2i_ras_snap.write(f2i_ras_snap_.cur());
         p.halt.write(halt_.cur());
     }
 
@@ -37,6 +38,7 @@ public:
         f2i_valid_.tick();
         f2i_pred_.tick();
         f2i_pred_target_.tick();
+        f2i_ras_snap_.tick();
         halt_.tick();
     }
 
@@ -47,6 +49,7 @@ public:
         f2i_valid_.reset(0);
         f2i_pred_.reset(0);
         f2i_pred_target_.reset(0);
+        f2i_ras_snap_.reset(0);
         halt_.reset(0);
     }
 
@@ -61,5 +64,6 @@ private:
     Register<1>  f2i_valid_;
     Register<1>  f2i_pred_;
     Register<32> f2i_pred_target_;
+    Register<32> f2i_ras_snap_;   // RAS head at branch fetch (mispredict restore)
     Register<1>  halt_;
 };
